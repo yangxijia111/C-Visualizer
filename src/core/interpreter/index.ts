@@ -63,8 +63,11 @@ export class Interpreter {
   output = '';
   private scopeSeq = 0;
   steps: ExecutionStep[] = [];
-  /** 当前步骤草稿（表达式求值向其写轨迹） */
-  draft: StepDraft | null = null;
+  /** 步骤草稿栈：函数调用嵌套在表达式求值内时，外层语句的草稿保持在栈底 */
+  drafts: StepDraft[] = [];
+  get draft(): StepDraft | null {
+    return this.drafts.length > 0 ? this.drafts[this.drafts.length - 1] : null;
+  }
   /** 当前执行的函数与标签表（goto 用） */
   currentFn: FunctionDef | null = null;
   currentLabels: Map<string, import('../ast').LabelStmt> = new Map();
@@ -186,14 +189,13 @@ export class Interpreter {
       changedScopes: new Set(),
       outputDelta: '',
     };
-    this.draft = draft;
+    this.drafts.push(draft);
     return draft;
   }
 
   finishStep(description: string, extra?: { status?: ExecutionStep['status']; errorCode?: RunErrorCode; line?: number; endLine?: number }): void {
-    const draft = this.draft;
-    if (!draft) throw new RuntimeFailure('E_INTERNAL', 'finishStep 没有 draft', 1);
-    this.draft = null;
+    const draft = this.drafts.pop();
+    if (!draft) throw new RuntimeFailure('E_INTERNAL', 'finishStep 没有匹配的 draft（草稿栈为空）', 1);
     const step: ExecutionStep = {
       id: this.steps.length,
       line: extra?.line ?? draft.node.line,
@@ -314,21 +316,9 @@ export class Interpreter {
     if (this.callStack.length >= this.opts.maxCallDepth) {
       throw new RuntimeFailure('E_STACK_DEPTH', '函数调用深度超过 ' + this.opts.maxCallDepth + ' 层（可能是无限递归）', callLine);
     }
-    const argsText = fn.params.map((p, idx) => p.name + ' = ' + valueToDisplay(args[idx])).join('，');
     const mainStart = opts?.isMain === true;
-    const anchor = { line: callLine, endLine: callLine, column: 1, endColumn: 1, text: opts?.callText ?? fn.name };
-    this.beginStep(anchor, 'call');
-    this.draft?.flowEvents.push({
-      kind: 'call',
-      functionName: fn.name,
-      args: fn.params.map((p, idx) => p.name + ' = ' + valueToDisplay(args[idx] ?? { type: 'int', value: 0 })),
-    });
-    this.finishStep(
-      mainStart
-        ? '程序从 main 函数开始执行。'
-        : '调用函数 ' + fn.name + '(' + argsText + ')，压入新的栈帧，进入函数体。',
-    );
 
+    // 先压帧（调用步骤的快照应包含新栈帧与形参绑定）
     this.currentFn = fn;
     const savedLabels = this.currentLabels;
     this.currentLabels = collectLabels(fn.body.body);
@@ -341,6 +331,21 @@ export class Interpreter {
     }
     const frame = { functionName: fn.name, scopeId: scope.id, callLine };
     this.callStack.push(frame);
+
+    // 调用步骤
+    const argsText = fn.params.map((p, idx) => p.name + ' = ' + valueToDisplay(args[idx])).join('，');
+    const anchor = { line: callLine, endLine: callLine, column: 1, endColumn: 1, text: opts?.callText ?? fn.name };
+    this.beginStep(anchor, 'call');
+    this.draft?.flowEvents.push({
+      kind: 'call',
+      functionName: fn.name,
+      args: fn.params.map((p, idx) => p.name + ' = ' + valueToDisplay(args[idx] ?? intValue0f())),
+    });
+    this.finishStep(
+      mainStart
+        ? '程序从 main 函数开始执行。'
+        : '调用函数 ' + fn.name + '(' + argsText + ')，压入新的栈帧，进入函数体。',
+    );
 
     let returned;
     let returnedNormally = false;
@@ -371,7 +376,7 @@ export class Interpreter {
       throw new RuntimeFailure('E_NO_RETURN', '函数「' + fn.name + '」应有返回值，但执行到函数末尾没有遇到 return', callLine);
     }
     if (returnedNormally && mainStart) {
-      returned = { type: 'int', value: 0 };
+      returned = intValue0f();
     }
 
     const retAnchor = { line: callLine, endLine: callLine, column: 1, endColumn: 1, text: 'return' };
@@ -381,7 +386,7 @@ export class Interpreter {
       // main：终止步骤在弹帧前生成，快照保留最终变量现场（教学需要看到最终状态）
       this.beginStep(retAnchor, 'program-end');
       this.draft?.flowEvents.push({ kind: 'return', functionName: fn.name, value: returnValue });
-      this.finishStep(descProgramEnd(returned ?? { type: 'int', value: 0 }), { status: 'program-end' });
+      this.finishStep(descProgramEnd(returned ?? intValue0f()), { status: 'program-end' });
       this.callStack.pop();
       this.popScope();
       this.currentLabels = savedLabels;
@@ -443,7 +448,7 @@ export class Interpreter {
 
   private finishRuntimeError(f: RuntimeFailure): void {
     // 丢弃执行了一半的草稿（错误步骤从错误发生时的干净状态呈现）
-    this.draft = null;
+    this.drafts.length = 0;
     const node: NodeBase = { line: f.line, endLine: f.line, column: 1, endColumn: 1, text: '' };
     this.beginStep(node, 'runtime-error');
     this.finishStep(descRuntimeError(f.code, f.message), { status: 'runtime-error', errorCode: f.code });
@@ -483,6 +488,10 @@ export class GotoSignal extends Error {
 // ============ 工具 ============
 
 function intValue0(): RuntimeValue {
+  return { type: 'int', value: 0 };
+}
+
+function intValue0f(): RuntimeValue {
   return { type: 'int', value: 0 };
 }
 

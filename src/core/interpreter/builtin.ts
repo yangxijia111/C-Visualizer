@@ -37,30 +37,31 @@ export function execPrintf(i: Interpreter, e: Extract<Expr, { kind: 'call' }>): 
     if (!arg) {
       throw new RuntimeFailure('E_PRINTF', `printf 格式符 %${next} 缺少对应参数`, e.line);
     }
-    const v = evalExpr(i, arg);
-    argIdx++;
     let text: string;
-    switch (next) {
-      case 'd':
-      case 'i':
-        text = String(v.value | 0);
-        break;
-      case 'c':
-        text = String.fromCharCode(v.value & 0xff);
-        break;
-      case 'f':
-        text = v.value.toFixed(6);
-        break;
-      case 's': {
-        if (arg.kind !== 'string-literal') {
-          throw new RuntimeFailure('E_PRINTF', '%s 需要字符串字面量参数', e.line);
-        }
-        text = (arg as StringLiteral).value;
-        break;
+    if (next === 's') {
+      // %s 直接取字符串字面量内容（字符串不参与通用求值）
+      if (arg.kind !== 'string-literal') {
+        throw new RuntimeFailure('E_PRINTF', '%s 需要字符串字面量参数', e.line);
       }
-      default:
-        throw new RuntimeFailure('E_PRINTF', `不支持的格式符 %${next ?? ''}`, e.line);
+      text = (arg as StringLiteral).value;
+    } else {
+      const v = evalExpr(i, arg);
+      switch (next) {
+        case 'd':
+        case 'i':
+          text = String(v.value | 0);
+          break;
+        case 'c':
+          text = String.fromCharCode(v.value & 0xff);
+          break;
+        case 'f':
+          text = v.value.toFixed(6);
+          break;
+        default:
+          throw new RuntimeFailure('E_PRINTF', `不支持的格式符 %${next ?? ''}`, e.line);
+      }
     }
+    argIdx++;
     out += text;
     charCount += text.length;
     k++;
