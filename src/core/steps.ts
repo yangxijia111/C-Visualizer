@@ -57,6 +57,7 @@ export interface RunResult {
   /** 第 0 步之前的状态（全局初始化前） */
   initialSnapshot: Snapshot;
   steps: ExecutionStep[];
-  status: ExecutionStep['status'];
+  /** 汇总状态：completed = 正常结束 */
+  status: 'completed' | 'runtime-error' | 'step-limit' | 'time-limit' | 'empty';
   output: string;
 }

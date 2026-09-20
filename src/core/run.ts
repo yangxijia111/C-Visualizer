@@ -69,8 +69,12 @@ function findSyntaxError(root: SyntaxNode): CompileError {
       ')': '缺少右括号 )',
       '(': '缺少左括号 (',
       '{': '缺少左花括号 {',
+      identifier: '这里缺少一个名称或表达式',
+      number: '这里缺少一个数字',
+      expression: '这里缺少一个表达式',
+      'expression_statement': '这里缺少一条语句',
     };
-    return makeError('E_SYNTAX', 'parse', loc, nameMap[t] ?? `缺少「${t}」`);
+    return makeError('E_SYNTAX', 'parse', loc, nameMap[t] ?? `这里缺少「${t}」`);
   }
   return makeError('E_SYNTAX', 'parse', loc, '这里存在无法识别的语法', `问题片段：「${node.text.slice(0, 30)}」`);
 }
@@ -93,7 +97,7 @@ export function runProgram(program: Program, source: string, options?: RunOption
       source,
       initialSnapshot: { scopes: [], cells: {}, callStack: [], nextAddress: 1, output: '' },
       steps: [],
-      status: 'time-limit',
+      status: 'runtime-error',
       output: `内部错误：${msg}`,
     };
   }

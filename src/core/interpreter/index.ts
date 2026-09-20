@@ -279,9 +279,16 @@ export class Interpreter {
     };
   }
 
-  private lastStepStatus(): ExecutionStep['status'] {
+  private lastStepStatus(): RunResult['status'] {
     const last = this.steps[this.steps.length - 1];
-    return last ? last.status : 'ok';
+    if (!last) return 'empty';
+    switch (last.status) {
+      case 'program-end': return 'completed';
+      case 'runtime-error': return 'runtime-error';
+      case 'step-limit': return 'step-limit';
+      case 'time-limit': return 'time-limit';
+      default: return 'completed';
+    }
   }
 
   /**

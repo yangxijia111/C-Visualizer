@@ -546,10 +546,11 @@ export function convertStmt(n: N): Stmt[] {
   }
 }
 
-/** 转换复合语句体（顶层语句序列） */
+/** 转换复合语句体（顶层语句序列；注释节点跳过） */
 function convertBlock(n: N): Stmt[] {
   const out: Stmt[] = [];
   for (const kid of n.namedChildren) {
+    if (kid.type === 'comment') continue;
     out.push(...convertStmt(kid));
   }
   return out;
@@ -607,6 +608,7 @@ export function convertProgram(root: N): Program {
   const globals: import('./ast').VarDeclStmt[] = [];
 
   for (const kid of root.namedChildren) {
+    if (kid.type === 'comment') continue;
     if (kid.type === 'function_definition') {
       functions.push(convertFunctionDef(kid));
       continue;

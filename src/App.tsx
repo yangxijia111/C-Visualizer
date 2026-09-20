@@ -45,6 +45,26 @@ export default function App() {
     return m;
   }, [compileErrors]);
 
+  // 键盘快捷键：←/→ 步进，空格播放/暂停（编辑器未聚焦时）
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      const target = ev.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+      if (ev.key === 'ArrowRight' && canNextRef.current) {
+        setPlaying(false);
+        setCurrentStep((s) => Math.min(total - 1, s + 1));
+      } else if (ev.key === 'ArrowLeft' && currentStep > 0) {
+        setPlaying(false);
+        setCurrentStep((s) => Math.max(0, s - 1));
+      } else if (ev.key === ' ' && total > 0) {
+        ev.preventDefault();
+        setPlaying((p) => !p);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [total, currentStep]);
+
   // 播放
   useEffect(() => {
     if (!playing) return;
@@ -96,6 +116,8 @@ export default function App() {
 
   const canNext = currentStep < total - 1;
   const canPrev = currentStep > 0;
+  const canNextRef = useRef(canNext);
+  canNextRef.current = canNext;
   const lastStep = currentStep >= 0 ? steps[currentStep] : null;
 
   return (
