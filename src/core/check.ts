@@ -156,34 +156,52 @@ function collectReturns(stmts: Stmt[], out: { hasValue: boolean; at: { line: num
   stmts.forEach(walk);
 }
 
-/** 宽松收集函数体内全部变量声明（含嵌套块 / for-init），用于类型环境 */
+/**
+ * 收集函数体内全部变量声明用于类型环境（宽松：跨块可见）。
+ * 重复声明检查按真实块级作用域链：仅同一块内重复才报错，内层遮蔽外层合法。
+ */
 function collectLocalDecls(stmts: Stmt[], env: Map<string, CType>, errors: CompileError[]): void {
-  const walk = (s: Stmt): void => {
+  // 作用域链：链上的每个 Map 是一个块级作用域；声明只与链上「同块」冲突
+  const walk = (s: Stmt, scopes: Set<string>[]): void => {
     switch (s.kind) {
       case 'var-decl':
         for (const v of s.vars) {
-          if (env.has(v.name)) {
+          const own = scopes[scopes.length - 1];
+          if (own.has(v.name)) {
             errors.push(makeError('E_DECL', 'check', s, `变量「${v.name}」在同一作用域重复声明`));
+          } else {
+            own.add(v.name);
           }
           env.set(v.name, v.varType);
         }
         break;
-      case 'block': s.body.forEach(walk); break;
-      case 'label': walk(s.stmt); break;
+      case 'block':
+        s.body.forEach((child) => walk(child, [...scopes, new Set<string>()]));
+        break;
+      case 'label':
+        walk(s.stmt, scopes);
+        break;
       case 'if':
-        walk(s.then);
-        if (s.else) walk(s.else);
+        walk(s.then, [...scopes, new Set<string>()]);
+        if (s.else) walk(s.else, [...scopes, new Set<string>()]);
         break;
-      case 'while': case 'do-while': walk(s.body); break;
-      case 'for':
-        if (s.init && s.init.kind === 'var-decl') walk(s.init);
-        walk(s.body);
+      case 'while': case 'do-while':
+        walk(s.body, [...scopes, new Set<string>()]);
         break;
-      case 'switch': s.cases.forEach((c) => c.body.forEach(walk)); break;
+      case 'for': {
+        const forScope = [...scopes, new Set<string>()];
+        if (s.init && s.init.kind === 'var-decl') walk(s.init, forScope);
+        walk(s.body, forScope);
+        break;
+      }
+      case 'switch':
+        s.cases.forEach((c) => c.body.forEach((child) => walk(child, [...scopes, new Set<string>()])));
+        break;
       default: break;
     }
   };
-  stmts.forEach(walk);
+  const topLevel = new Set<string>();
+  stmts.forEach((child) => walk(child, [topLevel]));
 }
 
 interface Ctx {

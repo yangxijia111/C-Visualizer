@@ -50,3 +50,10 @@ export function internalError(source: unknown, fallbackLoc = { line: 1, column: 
   const detail = source instanceof Error ? source.message : String(source);
   return makeError('E_INTERNAL', 'check', fallbackLoc, `内部错误：${detail}`);
 }
+
+/** 运行期错误码（ExecutionStep.errorCode 用） */
+export type RunErrorCode = Extract<
+  ErrorCode,
+  'E_DIV_ZERO' | 'E_UNINIT_READ' | 'E_UNDEF_VAR' | 'E_NULL_DEREF' | 'E_BAD_DEREF'
+  | 'E_ARRAY_BOUND' | 'E_STACK_DEPTH' | 'E_NO_RETURN' | 'E_PRINTF' | 'E_INTERNAL'
+>;

@@ -74,3 +74,27 @@ function findSyntaxError(root: SyntaxNode): CompileError {
   }
   return makeError('E_SYNTAX', 'parse', loc, '这里存在无法识别的语法', `问题片段：「${node.text.slice(0, 30)}」`);
 }
+
+// ============ 执行入口 ============
+
+import { Interpreter } from './interpreter/index';
+import type { RunOptions } from './interpreter/index';
+import type { RunResult } from './steps';
+
+/** 执行已编译的程序，产出全部步骤（同步；受步数/深度/墙钟保护） */
+export function runProgram(program: Program, source: string, options?: RunOptions): RunResult {
+  try {
+    const interp = new Interpreter(program, source, options);
+    return interp.run();
+  } catch (e) {
+    // 兜底：解释器意外异常也绝不抛出
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      source,
+      initialSnapshot: { scopes: [], cells: {}, callStack: [], nextAddress: 1, output: '' },
+      steps: [],
+      status: 'time-limit',
+      output: `内部错误：${msg}`,
+    };
+  }
+}

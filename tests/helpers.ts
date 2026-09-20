@@ -34,3 +34,72 @@ export async function expectError(src: string, code: CompileError['code'], messa
   }
   return found;
 }
+
+// ============ 解释器测试工具 ============
+
+import { runProgram } from '../src/core/run';
+import type { RunResult, ExecutionStep } from '../src/core/steps';
+import type { RuntimeValue } from '../src/core/values';
+
+export interface RunOutcome {
+  result: RunResult;
+  ok: boolean;
+  steps: ExecutionStep[];
+  output: string;
+  status: RunResult['status'];
+  /** 某步之后（默认最后一步）某变量的值 */
+  varAt(stepIdx: number | 'final', name: string): RuntimeValue | undefined;
+  /** 最终值 */
+  finalVar(name: string): RuntimeValue | undefined;
+  /** 逐步 statementType(+phase) 序列 */
+  stepKinds(): string[];
+  /** 全部说明文案 */
+  descriptions(): string[];
+  /** 全部求值轨迹（扁平） */
+  traces(): { text: string; value?: number; skip?: string }[];
+  /** 错误码（若最后一步是 runtime-error） */
+  errorCode(): string | undefined;
+}
+
+export async function runSrc(src: string, opts?: { maxSteps?: number }): Promise<RunOutcome> {
+  const compiled = await compile(src);
+  if (!compiled.ok) {
+    const detail = compiled.errors.map((e) => `[${e.code}] ${e.line}:${e.column} ${e.message}`).join('; ');
+    throw new Error(`测试程序编译失败：${detail}\n源码：\n${src}`);
+  }
+  const result = runProgram(compiled.program, src, opts);
+  const steps = result.steps;
+  const lookup = (stepIdx: number | 'final', name: string): RuntimeValue | undefined => {
+    const snap = stepIdx === 'final'
+      ? steps[steps.length - 1]?.snapshot
+      : steps[stepIdx]?.snapshot;
+    if (!snap) return undefined;
+    for (const scope of snap.scopes) {
+      const v = scope.vars.find((x) => x.name === name);
+      if (v && v.address !== null) {
+        const cell = snap.cells[v.address];
+        if (!cell || cell.value === null) return undefined;
+        return { type: cell.type, value: cell.value, pointee: cell.pointee };
+      }
+    }
+    return undefined;
+  };
+  return {
+    result,
+    ok: steps.length > 0 && steps[steps.length - 1].status === 'program-end',
+    steps,
+    output: result.output,
+    status: result.status,
+    varAt: lookup,
+    finalVar: (name: string) => lookup('final', name),
+    stepKinds: () => steps.map((s) => (s.phase ? `${s.statementType}:${s.phase}` : s.statementType)),
+    descriptions: () => steps.map((s) => s.description),
+    traces: () => steps.flatMap((s) => (s.evalTrace ?? []).map((t) => t.kind === 'eval'
+      ? { text: t.text, value: t.value.value }
+      : { text: t.text, skip: t.reason })),
+    errorCode: () => {
+      const last = steps[steps.length - 1];
+      return last?.status === 'runtime-error' ? last.errorCode : undefined;
+    },
+  };
+}
