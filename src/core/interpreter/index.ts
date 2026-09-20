@@ -1,6 +1,7 @@
 // 解释器核心：状态管理 + 步骤构建 + 执行主流程
 // 详见 docs/EXECUTION_ENGINE.md
 import type { Program, NodeBase, FunctionDef, Stmt } from '../ast';
+import { collectLabels } from '../ast';
 import type { Scope, Snapshot, MemoryCell, Variable, RuntimeValue, Address, CellType, StackFrame } from '../values';
 import type { ScalarKind } from '../types';
 import { isPointer, isArray } from '../types';
@@ -64,6 +65,9 @@ export class Interpreter {
   steps: ExecutionStep[] = [];
   /** 当前步骤草稿（表达式求值向其写轨迹） */
   draft: StepDraft | null = null;
+  /** 当前执行的函数与标签表（goto 用） */
+  currentFn: FunctionDef | null = null;
+  currentLabels: Map<string, import('../ast').LabelStmt> = new Map();
   status: ExecutionStep['status'] = 'ok';
   private startTime = 0;
   readonly opts: Required<RunOptions>;
@@ -282,15 +286,40 @@ export class Interpreter {
    * Phase 5 的函数返回在 return 步骤之后自行弹帧。
    */
   execFunction(fn: FunctionDef): void {
+    this.currentFn = fn;
+    this.currentLabels = collectLabels(fn.body.body);
     this.pushScope('function', fn.name);
     // 形参在 Phase 5 处理
     this.execBlockBody(fn.body.body);
   }
 
-  /** 执行语句序列（不建块作用域；块作用域由 Block 语句自己管理） */
+  /** 查找当前函数内标签的位置（goto 目标行号） */
+  labelLine(name: string): number | undefined {
+    return this.currentLabels.get(name)?.line;
+  }
+
+  /**
+   * 执行语句序列（不建块作用域；块作用域由 Block 语句自己管理）。
+   * goto 信号在本层捕获：目标标签若在本序列中，直接从该标签继续执行
+   * （被跳过的语句不执行、其块作用域不创建）；否则向外冒泡。
+   */
   execBlockBody(stmts: Stmt[]): void {
-    for (const s of stmts) {
-      execStmt(this, s);
+    let idx = 0;
+    while (idx < stmts.length) {
+      const s = stmts[idx];
+      try {
+        execStmt(this, s);
+      } catch (e) {
+        if (e instanceof GotoSignal) {
+          const targetIdx = stmts.findIndex((st) => st.kind === 'label' && st.name === e.label);
+          if (targetIdx >= 0) {
+            idx = targetIdx;
+            continue;
+          }
+        }
+        throw e;
+      }
+      idx++;
     }
   }
 

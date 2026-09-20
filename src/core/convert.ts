@@ -477,9 +477,17 @@ export function convertStmt(n: N): Stmt[] {
       const bodyN = fld(n, 'body');
       let init: Stmt | null = null;
       if (initN) {
-        // initializer 是 declaration 或 expression_statement
-        const converted = initN.type === 'declaration' ? convertDeclaration(initN) : convertStmt(initN)[0];
-        if (converted) init = converted;
+        // initializer 形态：declaration / expression_statement / 裸表达式（如 i = 10）
+        if (initN.type === 'declaration') {
+          const converted = convertDeclaration(initN);
+          if (converted) init = converted;
+        } else if (initN.type === 'expression_statement') {
+          const converted = convertStmt(initN)[0];
+          if (converted) init = converted;
+        } else {
+          const np = posOf(initN);
+          init = { ...np, text: initN.text, kind: 'expr-stmt', expr: convertExpr(initN) };
+        }
       }
       const condition = condN ? convertExpr(condN) : null;
       const update = updN ? convertExpr(updN) : null;

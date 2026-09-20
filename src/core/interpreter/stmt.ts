@@ -5,10 +5,12 @@ import type { NodeBase } from '../ast';
 import type { RuntimeValue, Address, Scope } from '../values';
 import { isArray } from '../types';
 import type { Interpreter, StepDraft } from './index';
-import { RuntimeFailure, ReturnSignal } from './index';
+import { RuntimeFailure, ReturnSignal, BreakSignal, ContinueSignal, GotoSignal } from './index';
 import { evalExpr } from './expr';
 import {
   descVarDecl, descAssign, descExprStmt, descIfCondition, descIfBranch,
+  descLoopCheck, descForUpdate, descBreak, descContinue,
+  descSwitchDisc, descCaseMatch, descFallThrough, descGoto,
 } from '../explain';
 
 export function execStmt(i: Interpreter, s: Stmt): void {
@@ -42,15 +44,213 @@ export function execStmt(i: Interpreter, s: Stmt): void {
       execStmt(i, s.stmt);
       break;
     case 'while':
+      execWhile(i, s);
+      break;
     case 'do-while':
+      execDoWhile(i, s);
+      break;
     case 'for':
+      execFor(i, s);
+      break;
     case 'switch':
+      execSwitch(i, s);
+      break;
     case 'break':
+      execBreak(i, s);
+      break;
     case 'continue':
+      execContinue(i, s);
+      break;
     case 'goto':
-      // Phase 4 实现
-      throw new RuntimeFailure('E_INTERNAL', `语句 ${s.kind} 将在 Phase 4 实现`, s.line);
+      execGoto(i, s);
+      break;
   }
+}
+
+// ============ 循环 ============
+
+/** while：每次条件判断为独立步骤 */
+function execWhile(i: Interpreter, s: Extract<Stmt, { kind: 'while' }>): void {
+  for (;;) {
+    i.beginStep(s, 'while-condition', 'condition');
+    const v = evalExpr(i, s.condition);
+    const entered = v.value !== 0;
+    i.draft?.flowEvents.push({ kind: 'loop-check', loopType: 'while', conditionText: s.condition.text, value: v.value, entered });
+    i.finishStep(descLoopCheck('while', s.condition.text, v, entered));
+    if (!entered) break;
+
+    try {
+      execStmt(i, s.body);
+    } catch (e) {
+      if (e instanceof BreakSignal) break;
+      if (e instanceof ContinueSignal) continue;
+      throw e;
+    }
+  }
+}
+
+/** do-while：先执行后判断 */
+function execDoWhile(i: Interpreter, s: Extract<Stmt, { kind: 'do-while' }>): void {
+  for (;;) {
+    try {
+      execStmt(i, s.body);
+    } catch (e) {
+      if (e instanceof BreakSignal) break;
+      if (!(e instanceof ContinueSignal)) throw e;
+    }
+    i.beginStep(s, 'do-while-condition', 'condition');
+    const v = evalExpr(i, s.condition);
+    const entered = v.value !== 0;
+    i.draft?.flowEvents.push({ kind: 'loop-check', loopType: 'do-while', conditionText: s.condition.text, value: v.value, entered });
+    i.finishStep(descLoopCheck('do-while', s.condition.text, v, entered));
+    if (!entered) break;
+  }
+}
+
+/** for：init / 每次条件判断 / update 各自独立步骤；init 变量作用域限于循环 */
+function execFor(i: Interpreter, s: Extract<Stmt, { kind: 'for' }>): void {
+  i.pushScope('for', `for(第${s.line}行)`);
+  try {
+    if (s.init) {
+      if (s.init.kind === 'var-decl') {
+        execVarDecl(i, s.init);
+      } else {
+        execExprStmt(i, s.init.expr);
+      }
+    }
+    for (;;) {
+      if (s.condition) {
+        i.beginStep(s, 'for-condition', 'condition');
+        const v = evalExpr(i, s.condition);
+        const entered = v.value !== 0;
+        i.draft?.flowEvents.push({ kind: 'loop-check', loopType: 'for', conditionText: s.condition.text, value: v.value, entered });
+        i.finishStep(descLoopCheck('for', s.condition.text, v, entered));
+        if (!entered) break;
+      }
+      try {
+        execStmt(i, s.body);
+      } catch (e) {
+        if (e instanceof BreakSignal) break;
+        if (!(e instanceof ContinueSignal)) throw e;
+      }
+      if (s.update) {
+        i.beginStep(s, 'for-update', 'update');
+        const v = evalExpr(i, s.update);
+        i.draft?.flowEvents.push({ kind: 'loop-update', text: s.update.text, newValue: v.value });
+        i.finishStep(descForUpdate(s.update.text, v));
+      }
+    }
+  } finally {
+    i.popScope();
+  }
+}
+
+// ============ break / continue ============
+
+function execBreak(i: Interpreter, s: Extract<Stmt, { kind: 'break' }>): void {
+  i.beginStep(s, 'break');
+  i.draft?.flowEvents.push({ kind: 'break', from: 'loop' });
+  i.finishStep(descBreak('loop'));
+  throw new BreakSignal();
+}
+
+function execContinue(i: Interpreter, s: Extract<Stmt, { kind: 'continue' }>): void {
+  i.beginStep(s, 'continue');
+  i.draft?.flowEvents.push({ kind: 'continue', loopType: 'loop' });
+  i.finishStep(descContinue('loop', false));
+  throw new ContinueSignal();
+}
+
+// ============ switch ============
+
+/**
+ * switch：判别式求值 → 匹配区段 → 顺序执行（fall-through 穿透逐步展示）。
+ * break（BreakSignal）跳出；穿透边界生成独立步骤。
+ */
+function execSwitch(i: Interpreter, s: Extract<Stmt, { kind: 'switch' }>): void {
+  // 步骤 1：判别式求值
+  i.beginStep(s, 'switch-discriminant', 'discriminant');
+  const dv = evalExpr(i, s.discriminant);
+  i.draft?.flowEvents.push({ kind: 'switch-discriminant', text: s.discriminant.text, value: dv.value });
+  i.finishStep(descSwitchDisc(s.discriminant.text, dv));
+
+  // 步骤 2：匹配区段
+  let matchIdx = -1;
+  let matchedLabel: string | null = null;
+  let defaultIdx = -1;
+  for (let k = 0; k < s.cases.length; k++) {
+    const sec = s.cases[k];
+    for (const label of sec.labels) {
+      if (label.isDefault) {
+        if (defaultIdx < 0) defaultIdx = k;
+        continue;
+      }
+      if (label.value && evalExprConst(i, label.value) === dv.value) {
+        matchIdx = k;
+        matchedLabel = `case ${label.value.text}`;
+        break;
+      }
+    }
+    if (matchIdx >= 0) break;
+  }
+  if (matchIdx < 0 && defaultIdx >= 0) {
+    matchIdx = defaultIdx;
+    matchedLabel = 'default';
+  }
+
+  i.beginStep(s, 'case-check', 'match');
+  i.draft?.flowEvents.push({ kind: 'case-match', caseText: matchedLabel ?? '无匹配', matched: matchIdx >= 0 });
+  i.finishStep(descCaseMatch(matchedLabel, dv, matchIdx >= 0));
+
+  if (matchIdx < 0) return;
+
+  // 顺序执行各区段（穿透）：每个区段执行完后若无 break，生成穿透步骤
+  try {
+    for (let k = matchIdx; k < s.cases.length; k++) {
+      const sec = s.cases[k];
+      for (const st of sec.body) {
+        execStmt(i, st);
+      }
+      if (k < s.cases.length - 1) {
+        // 未 break → 穿透
+        const fromCase = sectionLabelName(s, k);
+        const toCase = sectionLabelName(s, k + 1);
+        i.beginStep(s, 'case-fallthrough', 'fallthrough');
+        i.draft?.flowEvents.push({ kind: 'case-fallthrough', fromCase, toCase });
+        i.finishStep(descFallThrough(fromCase, toCase));
+      }
+    }
+  } catch (e) {
+    if (e instanceof BreakSignal) {
+      // break 跳出 switch 的步骤由 break 语句自身生成
+      return;
+    }
+    throw e;
+  }
+}
+
+/** 区段展示名（穿透文案用） */
+function sectionLabelName(s: Extract<Stmt, { kind: 'switch' }>, idx: number): string {
+  const sec = s.cases[idx];
+  const def = sec.labels.find((l) => l.isDefault);
+  if (def) return 'default';
+  return `case ${sec.labels.map((l) => l.value?.text ?? '?').join(' / ')}`;
+}
+
+/** 常量表达式求值（case 标签已由检查器保证为常量） */
+function evalExprConst(i: Interpreter, e: Expr): number {
+  const v = evalExpr(i, e);
+  return v.value;
+}
+
+// ============ goto ============
+
+function execGoto(i: Interpreter, s: Extract<Stmt, { kind: 'goto' }>): void {
+  const toLine = i.labelLine(s.label) ?? 0;
+  i.beginStep(s, 'goto');
+  i.draft?.flowEvents.push({ kind: 'goto', label: s.label, fromLine: s.line, toLine });
+  i.finishStep(descGoto(s.label, s.line, toLine));
+  throw new GotoSignal(s.label);
 }
 
 /** 变量声明（标量、指针、一维数组） */

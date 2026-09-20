@@ -92,3 +92,54 @@ export function descTimeLimit(): string {
   return '执行时间过长，已自动停止（可能存在无限循环或超大计算量）。';
 }
 
+
+// ============ 控制流（Phase 4） ============
+
+/** 循环条件判断 */
+export function descLoopCheck(loopType: 'while' | 'do-while' | 'for', condText: string, v: RuntimeValue, entered: boolean): string {
+  const name = loopType === 'while' ? 'while' : loopType === 'do-while' ? 'do-while' : 'for';
+  const act = entered
+    ? (loopType === 'do-while' ? '条件成立，继续下一轮循环' : '条件成立，进入循环体')
+    : `条件不成立，退出 ${name} 循环`;
+  return `判断 ${name} 循环条件 ${condText}：结果为 ${valueToDisplay(v)}（${v.value !== 0 ? '真' : '假'}），${act}。`;
+}
+
+/** for 的 init / update */
+export function descForInit(): string {
+  return '执行 for 循环的初始化部分（只执行一次）。';
+}
+
+export function descForUpdate(text: string, v: RuntimeValue): string {
+  return `执行 for 循环的更新表达式 ${text}，当前值为 ${valueToDisplay(v)}，随后回到条件判断。`;
+}
+
+/** break / continue */
+export function descBreak(from: 'loop' | 'switch', loopType?: string): string {
+  if (from === 'switch') return '执行 break：跳出 switch 语句。';
+  return `执行 break：跳出${loopType ? ` ${loopType} ` : ''}循环。`;
+}
+
+export function descContinue(loopType: string, forUpdateNext: boolean): string {
+  return forUpdateNext
+    ? `执行 continue：跳过本轮循环体剩余部分，转到 ${loopType} 的更新表达式。`
+    : `执行 continue：跳过本轮循环体剩余部分，回到 ${loopType} 的条件判断。`;
+}
+
+/** switch */
+export function descSwitchDisc(text: string, v: RuntimeValue): string {
+  return `计算 switch 表达式 ${text}，结果为 ${valueToDisplay(v)}，开始匹配 case。`;
+}
+
+export function descCaseMatch(caseText: string | null, discValue: RuntimeValue, matched: boolean): string {
+  if (caseText === null) return `switch 表达式为 ${valueToDisplay(discValue)}，没有匹配任何 case，也没有 default，跳过整个 switch。`;
+  return `switch 表达式结果为 ${valueToDisplay(discValue)}，${matched ? `进入 ${caseText}` : `没有匹配的 case，进入 ${caseText}`}。`;
+}
+
+export function descFallThrough(fromCase: string, toCase: string): string {
+  return `${fromCase} 的语句执行完毕且没有 break，发生穿透（fall-through），继续执行 ${toCase} 的语句。`;
+}
+
+/** goto */
+export function descGoto(label: string, _fromLine: number, toLine: number): string {
+  return `执行 goto ${label}：程序跳转到标签 ${label}（第 ${toLine} 行）。`;
+}
