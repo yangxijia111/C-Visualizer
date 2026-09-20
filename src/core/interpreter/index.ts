@@ -68,6 +68,8 @@ export class Interpreter {
   /** 当前执行的函数与标签表（goto 用） */
   currentFn: FunctionDef | null = null;
   currentLabels: Map<string, import('../ast').LabelStmt> = new Map();
+  /** 函数表（调用解析用） */
+  fnTable: Map<string, FunctionDef> = new Map();
   status: ExecutionStep['status'] = 'ok';
   private startTime = 0;
   readonly opts: Required<RunOptions>;
@@ -78,6 +80,7 @@ export class Interpreter {
     options?: RunOptions,
   ) {
     this.opts = { ...DEFAULT_RUN_OPTIONS, ...options };
+    for (const f of program.functions) this.fnTable.set(f.name, f);
   }
 
   // ============ 环境管理 ============
@@ -248,13 +251,13 @@ export class Interpreter {
       if (!main) {
         throw new RuntimeFailure('E_INTERNAL', '缺少 main 函数（检查器应已拦截）', 1);
       }
-      this.execFunction(main);
-      // main 执行到末尾且没有 return：正常结束（教学约定，返回 0）
-      this.finishMainEnd({ type: 'int', value: 0 });
+      this.callFunction(main, [], main.body.line, { isMain: true, callText: 'main' });
     } catch (e) {
       if (e instanceof ReturnSignal) {
-        // main 返回
-        this.finishMainEnd(e.value !== undefined ? e.value : intValue0());
+        // main 的 return 已由 callFunction 捕获；此处仅防御信号泄漏
+        const lastLine = this.steps.length > 0 ? this.steps[this.steps.length - 1].line : 1;
+        this.beginStep({ line: lastLine, endLine: lastLine, column: 1, endColumn: 1, text: '' }, 'program-end');
+        this.finishStep(descProgramEnd(e.value ?? intValue0()), { status: 'program-end' });
       } else if (e instanceof HaltSignal) {
         this.finishHalt(e.haltStatus);
       } else if (e instanceof RuntimeFailure) {
@@ -299,6 +302,111 @@ export class Interpreter {
   }
 
   /**
+   * 完整函数调用约定：调用步骤（实参→形参、压栈）→ 执行函数体 → 返回步骤（出栈）。
+   * 递归天然支持（每帧独立作用域）；调用深度受 maxCallDepth 保护。
+   */
+  callFunction(
+    fn: FunctionDef,
+    args: RuntimeValue[],
+    callLine: number,
+    opts?: { isMain?: boolean; callText?: string },
+  ): RuntimeValue | undefined {
+    if (this.callStack.length >= this.opts.maxCallDepth) {
+      throw new RuntimeFailure('E_STACK_DEPTH', '函数调用深度超过 ' + this.opts.maxCallDepth + ' 层（可能是无限递归）', callLine);
+    }
+    const argsText = fn.params.map((p, idx) => p.name + ' = ' + valueToDisplay(args[idx])).join('，');
+    const mainStart = opts?.isMain === true;
+    const anchor = { line: callLine, endLine: callLine, column: 1, endColumn: 1, text: opts?.callText ?? fn.name };
+    this.beginStep(anchor, 'call');
+    this.draft?.flowEvents.push({
+      kind: 'call',
+      functionName: fn.name,
+      args: fn.params.map((p, idx) => p.name + ' = ' + valueToDisplay(args[idx] ?? { type: 'int', value: 0 })),
+    });
+    this.finishStep(
+      mainStart
+        ? '程序从 main 函数开始执行。'
+        : '调用函数 ' + fn.name + '(' + argsText + ')，压入新的栈帧，进入函数体。',
+    );
+
+    this.currentFn = fn;
+    const savedLabels = this.currentLabels;
+    this.currentLabels = collectLabels(fn.body.body);
+    const scope = this.pushScope('function', fn.name);
+    for (let idx = 0; idx < fn.params.length; idx++) {
+      const p = fn.params[idx];
+      const pseudo = { line: callLine, endLine: callLine, column: 1, endColumn: 1, text: p.name };
+      const addr = this.declareScalar(scope, p.name, p.type, pseudo);
+      this.writeCell(addr, args[idx], pseudo);
+    }
+    const frame = { functionName: fn.name, scopeId: scope.id, callLine };
+    this.callStack.push(frame);
+
+    let returned;
+    let returnedNormally = false;
+    try {
+      this.execBlockBody(fn.body.body);
+      returnedNormally = true;
+    } catch (e) {
+      if (e instanceof ReturnSignal) {
+        returned = e.value;
+      } else if (e instanceof GotoSignal) {
+        throw new RuntimeFailure('E_INTERNAL', 'goto 目标标签解析失败（检查器应已拦截）', callLine);
+      } else if (e instanceof HaltSignal) {
+        // 步数/时间上限：保持现场直接冒泡（终止步骤需保留当前帧状态）
+        throw e;
+      } else {
+        // 运行错误：弹帧后抛出（错误步骤呈现调用者视角的冻结现场）
+        this.callStack.pop();
+        this.popScope();
+        this.currentLabels = savedLabels;
+        const top = this.callStack[this.callStack.length - 1];
+        this.currentFn = top ? this.fnTable.get(top.functionName) ?? null : null;
+        throw e;
+      }
+    }
+
+    // main 执行到末尾：教学约定隐式返回 0（C99 同）；其他非 void 函数报错
+    if (returnedNormally && fn.returnType !== 'void' && !mainStart) {
+      throw new RuntimeFailure('E_NO_RETURN', '函数「' + fn.name + '」应有返回值，但执行到函数末尾没有遇到 return', callLine);
+    }
+    if (returnedNormally && mainStart) {
+      returned = { type: 'int', value: 0 };
+    }
+
+    const retAnchor = { line: callLine, endLine: callLine, column: 1, endColumn: 1, text: 'return' };
+    const returnValue = returned !== undefined ? valueToDisplay(returned) : undefined;
+
+    if (mainStart) {
+      // main：终止步骤在弹帧前生成，快照保留最终变量现场（教学需要看到最终状态）
+      this.beginStep(retAnchor, 'program-end');
+      this.draft?.flowEvents.push({ kind: 'return', functionName: fn.name, value: returnValue });
+      this.finishStep(descProgramEnd(returned ?? { type: 'int', value: 0 }), { status: 'program-end' });
+      this.callStack.pop();
+      this.popScope();
+      this.currentLabels = savedLabels;
+      this.currentFn = null;
+      return returned;
+    }
+
+    // 普通函数：先弹帧，返回步骤的快照呈现「回到调用者」的状态
+    this.callStack.pop();
+    this.popScope();
+    this.currentLabels = savedLabels;
+    const caller = this.callStack[this.callStack.length - 1];
+    this.currentFn = caller ? this.fnTable.get(caller.functionName) ?? null : null;
+
+    this.beginStep(retAnchor, 'return');
+    this.draft?.flowEvents.push({ kind: 'return', functionName: fn.name, value: returnValue });
+    this.finishStep(
+      returned !== undefined
+        ? '函数 ' + fn.name + ' 返回 ' + valueToDisplay(returned) + '，栈帧弹出，回到调用点（第 ' + (caller ? caller.callLine : callLine) + ' 行）。'
+        : '函数 ' + fn.name + ' 执行完毕（无返回值），栈帧弹出，回到调用点。',
+    );
+    return returned;
+  }
+
+  /**
    * 执行语句序列（不建块作用域；块作用域由 Block 语句自己管理）。
    * goto 信号在本层捕获：目标标签若在本序列中，直接从该标签继续执行
    * （被跳过的语句不执行、其块作用域不创建）；否则向外冒泡。
@@ -323,12 +431,6 @@ export class Interpreter {
     }
   }
 
-  private finishMainEnd(returnValue: RuntimeValue): void {
-    const node: NodeBase = { line: this.sourceLineCount(), endLine: this.sourceLineCount(), column: 1, endColumn: 1, text: '' };
-    this.beginStep(node, 'program-end');
-    this.finishStep(descProgramEnd(returnValue), { status: 'program-end' });
-  }
-
   private finishHalt(halt: 'step-limit' | 'time-limit'): void {
     const lastLine = this.steps.length > 0 ? this.steps[this.steps.length - 1].line : 1;
     const node: NodeBase = { line: lastLine, endLine: lastLine, column: 1, endColumn: 1, text: '' };
@@ -345,10 +447,6 @@ export class Interpreter {
     const node: NodeBase = { line: f.line, endLine: f.line, column: 1, endColumn: 1, text: '' };
     this.beginStep(node, 'runtime-error');
     this.finishStep(descRuntimeError(f.code, f.message), { status: 'runtime-error', errorCode: f.code });
-  }
-
-  private sourceLineCount(): number {
-    return this.source.split('\n').length;
   }
 }
 
@@ -405,9 +503,4 @@ export function coerceToCell(cell: MemoryCell, v: RuntimeValue): number {
     case 'pointer':
       return v.value;
   }
-}
-
-/** 值展示（本模块内使用） */
-export function display(v: RuntimeValue): string {
-  return valueToDisplay(v);
 }

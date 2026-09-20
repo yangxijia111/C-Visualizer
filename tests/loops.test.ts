@@ -78,7 +78,8 @@ describe('for', () => {
     `);
     const kinds = r.stepKinds();
     expect(kinds.filter((k) => k === 'var-decl').length).toBe(4); // for-init 的 i 1 次 + body 的 t 每轮 1 次
-    expect(kinds[0]).toBe('var-decl'); // for 的 init
+    expect(kinds[0]).toBe('call'); // main 调用
+    expect(kinds[1]).toBe('var-decl'); // for 的 init
     const conds = kinds.filter((k) => k === 'for-condition:condition').length;
     const updates = kinds.filter((k) => k === 'for-update:update').length;
     expect(conds).toBe(4); // 3 次真 + 1 次假

@@ -6,6 +6,7 @@ import { intValue, charValue, floatValue, truthy, wrap32, cDiv, cMod, valueToDis
 import type { Interpreter } from './index';
 import { RuntimeFailure, cellToValue } from './index';
 import { descShortCircuit } from '../explain';
+import { execPrintf, execPuts } from './builtin';
 
 /** 求值表达式（含副作用）；轨迹写入 interp.draft */
 export function evalExpr(i: Interpreter, e: Expr): RuntimeValue {
@@ -61,8 +62,7 @@ export function evalExpr(i: Interpreter, e: Expr): RuntimeValue {
       // Phase 6 实现数组与指针
       throw new RuntimeFailure('E_INTERNAL', '数组/指针求值将在后续阶段实现', e.line);
     case 'call':
-      // Phase 5 实现函数调用
-      throw new RuntimeFailure('E_INTERNAL', '函数调用将在后续阶段实现', e.line);
+      return evalCall(i, e);
     default:
       throw new RuntimeFailure('E_INTERNAL', `未知表达式 ${e.kind}`, 1);
   }
@@ -210,6 +210,20 @@ function isNumericKind(t: string): boolean {
 /** 记录一个求值轨迹条目 */
 export function pushEval(i: Interpreter, e: Expr, value: RuntimeValue): void {
   i.draft?.evalTrace.push({ kind: 'eval', text: e.text, value });
+}
+
+/** 函数调用表达式：内置 printf/puts 或用户函数 */
+function evalCall(i: Interpreter, e: Extract<Expr, { kind: 'call' }>): RuntimeValue {
+  if (e.name === 'printf') return execPrintf(i, e);
+  if (e.name === 'puts') return execPuts(i, e);
+  const fn = i.fnTable.get(e.name);
+  if (!fn) {
+    throw new RuntimeFailure('E_INTERNAL', `调用了未定义的函数「${e.name}」（检查器应已拦截）`, e.line);
+  }
+  const args = e.args.map((a) => evalExpr(i, a));
+  const result = i.callFunction(fn, args, e.line, { callText: e.text });
+  if (result !== undefined) pushEval(i, e, result);
+  return result ?? intValue(0);
 }
 
 export { descShortCircuit };

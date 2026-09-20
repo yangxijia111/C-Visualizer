@@ -269,9 +269,9 @@ describe('变量与作用域', () => {
         return 0;
       }
     `);
-    // 第 1 步（声明 a）后 a 无值
-    expect(r.varAt(0, 'a')).toBeUndefined();
-    expect(r.varAt(1, 'a')?.value).toBe(5);
+    // 第 0 步是 call main；第 1 步（声明 a）后 a 无值
+    expect(r.varAt(1, 'a')).toBeUndefined();
+    expect(r.varAt(2, 'a')?.value).toBe(5);
   });
 });
 
@@ -368,9 +368,9 @@ int main() {
     expect(r.ok).toBe(true);
     expect(r.finalVar('a')?.value).toBe(2);
     expect(r.finalVar('b')?.value).toBe(2);
-    // 步骤序列：声明 a、声明 b、条件、分支、自增、返回
+    // 步骤序列：调用 main、声明 a、声明 b、条件、分支、自增、结束
     expect(r.stepKinds()).toEqual([
-      'var-decl', 'var-decl', 'if-condition:condition', 'if-branch:branch', 'expr-stmt', 'program-end',
+      'call', 'var-decl', 'var-decl', 'if-condition:condition', 'if-branch:branch', 'expr-stmt', 'program-end',
     ]);
   });
 });
