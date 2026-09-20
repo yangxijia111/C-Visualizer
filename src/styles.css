@@ -1,0 +1,58 @@
+:root {
+  --bg: #f5f6fa;
+  --panel: #ffffff;
+  --border: #dcdfe6;
+  --text: #2c3e50;
+  --text-dim: #7f8c9b;
+  --accent: #2563eb;
+  --accent-soft: #dbeafe;
+  --highlight-line: #fef3c7;
+  --changed-bg: #fde68a;
+  --new-bg: #bbf7d0;
+  --error: #dc2626;
+  --error-bg: #fee2e2;
+  --warn: #d97706;
+  --ok: #16a34a;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 6px;
+  padding: 5px 12px;
+  color: var(--text);
+}
+
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+select {
+  font: inherit;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+}
