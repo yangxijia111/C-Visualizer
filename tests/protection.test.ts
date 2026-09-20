@@ -1,7 +1,7 @@
 // 边界情况与保护机制测试
 import { describe, expect, it } from 'vitest';
 import { compile, runProgram } from '../src/core/run';
-import { compileErr, expectError } from './helpers';
+import { compileErr, expectError, runSrc } from './helpers';
 
 describe('边界情况', () => {
   it('空程序：缺少 main', async () => {
