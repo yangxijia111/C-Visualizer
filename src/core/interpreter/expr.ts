@@ -2,7 +2,7 @@
 // 求值轨迹写入当前步骤草稿（docs/EXECUTION_ENGINE.md §2 EvalItem）
 import type { Expr, BinaryOp, AssignOp } from '../ast';
 import type { RuntimeValue } from '../values';
-import { intValue, charValue, floatValue, truthy, wrap32, cDiv, cMod, valueToDisplay } from '../values';
+import { intValue, charValue, floatValue, pointerValue, truthy, wrap32, cDiv, cMod, valueToDisplay } from '../values';
 import type { Interpreter } from './index';
 import { RuntimeFailure, cellToValue } from './index';
 import { descShortCircuit } from '../explain';
@@ -57,10 +57,15 @@ export function evalExpr(i: Interpreter, e: Expr): RuntimeValue {
     case 'assign':
       return evalAssign(i, e.op, e);
     case 'addr-of':
+      return evalAddrOf(i, e);
     case 'deref':
-    case 'array-access':
-      // Phase 6 实现数组与指针
-      throw new RuntimeFailure('E_INTERNAL', '数组/指针求值将在后续阶段实现', e.line);
+      return evalDeref(i, e);
+    case 'array-access': {
+      const ref = resolveArrayAccess(i, e);
+      const v = i.readValue(ref.base + ref.index, e);
+      pushEval(i, e, v);
+      return v;
+    }
     case 'call':
       return evalCall(i, e);
     default:
@@ -68,7 +73,7 @@ export function evalExpr(i: Interpreter, e: Expr): RuntimeValue {
   }
 }
 
-/** 解析标量左值（赋值/自增目标） */
+/** 解析标量左值（赋值/自增目标：变量、数组元素、*p） */
 export interface ScalarLValueRef {
   address: number;
   name: string;
@@ -82,8 +87,93 @@ export function resolveScalarLValue(i: Interpreter, e: Expr): ScalarLValueRef {
     }
     return { address: variable.address, name: e.name };
   }
-  // *p / a[i] 在 Phase 6 实现
-  throw new RuntimeFailure('E_INTERNAL', '间接左值将在后续阶段实现', e.line);
+  if (e.kind === 'array-access') {
+    const ref = resolveArrayAccess(i, e);
+    return { address: ref.base + ref.index, name: `${e.array.text}[${ref.index}]` };
+  }
+  if (e.kind === 'deref') {
+    return { address: derefAddress(i, e), name: `*${e.target.text}` };
+  }
+  throw new RuntimeFailure('E_INTERNAL', '该表达式不能作为左值（检查器应已拦截）', e.line);
+}
+
+/** 数组访问解析：变量查找 + 下标求值 + 越界检查 */
+export interface ArrayAccessRef {
+  base: number;
+  index: number;
+  elemType: 'int' | 'char' | 'float' | 'double';
+  length: number;
+  name: string;
+}
+
+export function resolveArrayAccess(i: Interpreter, e: Extract<Expr, { kind: 'array-access' }>): ArrayAccessRef {
+  const { variable } = i.requireVariable(e.array.name, e);
+  if (variable.address === null || typeof variable.type === 'string' || variable.type.kind !== 'array') {
+    throw new RuntimeFailure('E_INTERNAL', `「${e.array.name}」不是数组（检查器应已拦截）`, e.line);
+  }
+  const idxV = evalExpr(i, e.index);
+  const idx = idxV.value;
+  const length = variable.type.length;
+  if (idx < 0 || idx >= length) {
+    throw new RuntimeFailure(
+      'E_ARRAY_BOUND',
+      `数组下标越界：${e.array.name}[${idx}]，数组长度为 ${length}（有效下标 0～${length - 1}）`,
+      e.line,
+    );
+  }
+  return { base: variable.address, index: idx, elemType: variable.type.elem, length, name: e.array.name };
+}
+
+/** & 取地址 */
+function evalAddrOf(i: Interpreter, e: Extract<Expr, { kind: 'addr-of' }>): RuntimeValue {
+  const t = e.target;
+  if (t.kind === 'identifier') {
+    const { variable } = i.requireVariable(t.name, e);
+    if (variable.address === null) throw new RuntimeFailure('E_INTERNAL', '变量没有地址', e.line);
+    const pointee = typeof variable.type === 'string' && variable.type !== 'void'
+      ? variable.type
+      : 'int';
+    const v = pointerValue(variable.address, pointee);
+    pushEval(i, e, v);
+    return v;
+  }
+  if (t.kind === 'array-access') {
+    const ref = resolveArrayAccess(i, t);
+    const v = pointerValue(ref.base + ref.index, ref.elemType);
+    pushEval(i, e, v);
+    return v;
+  }
+  if (t.kind === 'deref') {
+    // &*p 等价于 p
+    const v = evalExpr(i, t.target);
+    pushEval(i, e, v);
+    return v;
+  }
+  throw new RuntimeFailure('E_INTERNAL', '取地址目标不合法（检查器应已拦截）', e.line);
+}
+
+/** 解引用地址计算（空指针/未初始化检查） */
+function derefAddress(i: Interpreter, e: Extract<Expr, { kind: 'deref' }>): number {
+  const p = evalExpr(i, e.target);
+  if (p.type !== 'pointer') {
+    throw new RuntimeFailure('E_BAD_DEREF', `解引用 * 只能作用于指针`, e.line);
+  }
+  if (p.value === 0) {
+    throw new RuntimeFailure('E_NULL_DEREF', `解引用了空指针（${e.target.text} 的值为 0）`, e.line);
+  }
+  return p.value;
+}
+
+/** *p 求值 */
+function evalDeref(i: Interpreter, e: Extract<Expr, { kind: 'deref' }>): RuntimeValue {
+  const addr = derefAddress(i, e);
+  const cell = i.cells.get(addr);
+  if (!cell) {
+    throw new RuntimeFailure('E_NULL_DEREF', `指针指向了无效的内存位置（#${addr}）`, e.line);
+  }
+  const v = i.readValue(addr, e);
+  pushEval(i, e, v);
+  return v;
 }
 
 function incDecValue(v: RuntimeValue, delta: number): RuntimeValue {

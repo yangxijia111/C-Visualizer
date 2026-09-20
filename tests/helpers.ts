@@ -76,10 +76,14 @@ export async function runSrc(src: string, opts?: { maxSteps?: number }): Promise
     if (!snap) return undefined;
     for (const scope of snap.scopes) {
       const v = scope.vars.find((x) => x.name === name);
-      if (v && v.address !== null) {
-        const cell = snap.cells[v.address];
-        if (!cell || cell.value === null) return undefined;
-        return { type: cell.type, value: cell.value, pointee: cell.pointee };
+      if (v) {
+        // 数组名不作为标量值返回（用 snapshot 检查元素）
+        if (v.length !== undefined) return undefined;
+        if (v.address !== null) {
+          const cell = snap.cells[v.address];
+          if (!cell || cell.value === null) return undefined;
+          return { type: cell.type, value: cell.value, pointee: cell.pointee };
+        }
       }
     }
     return undefined;
