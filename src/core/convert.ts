@@ -245,15 +245,14 @@ export function convertExpr(n: N): Expr {
     case 'string_literal':
       return { ...base, kind: 'string-literal', value: parseStringLiteral(n.text, n) };
     case 'identifier': {
-      if (n.text === 'NULL') {
-        // NULL 常量：语法上是 identifier，这里折叠为空指针字面量（int 0 语义）
-        return { ...base, kind: 'int-literal', value: 0 };
-      }
       if (n.text === 'true' || n.text === 'false') {
         throw convError('E_UNSUPPORTED', n, 'v1.0 不支持 stdbool（true/false）', '请使用 1 和 0 表示真假');
       }
       return { ...base, kind: 'identifier', name: n.text };
     }
+    case 'null':
+      // NULL 常量在 tree-sitter-c 中是独立的 null 节点，折叠为空指针（int 0 语义）
+      return { ...base, kind: 'int-literal', value: 0 };
     case 'parenthesized_expression': {
       const inner = n.namedChildren[0];
       if (!inner) throw convError('E_SYNTAX', n, '括号内缺少表达式');
