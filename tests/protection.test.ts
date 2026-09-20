@@ -118,3 +118,48 @@ describe('编译错误批量回归（各错误码）', () => {
     expect(r.length).toBeGreaterThan(0);
   });
 });
+
+describe('文档承诺核对（SUPPORTED_C）', () => {
+  it('空语句：while 与 for 的空循环体', async () => {
+    const r = await runSrc(`
+      int main() {
+        int i = 0;
+        while (i < 3) i++;
+        for (int j = 0; j < 2; j++) ;
+        return 0;
+      }
+    `);
+    expect(r.ok).toBe(true);
+    expect(r.finalVar('i')?.value).toBe(3);
+  });
+
+  it('嵌套函数调用作为条件与实参', async () => {
+    const r = await runSrc(`
+      int inc(int x) { return x + 1; }
+      int main() {
+        int a = inc(inc(inc(0)));
+        if (inc(0) == 1) { a = a + 100; }
+        return 0;
+      }
+    `);
+    expect(r.finalVar('a')?.value).toBe(103);
+  });
+
+  it('if 无花括号单语句与 else', async () => {
+    const r = await runSrc(`
+      int main() {
+        int a = 5;
+        if (a > 1) a = 99;
+        else a = 0;
+        return 0;
+      }
+    `);
+    expect(r.finalVar('a')?.value).toBe(99);
+  });
+
+  it('int* p 写法（星号贴类型）', async () => {
+    const { compileOk } = await import('./helpers');
+    const p = await compileOk('int main() { int a = 1; int* p = &a; int b = *p; return 0; }');
+    expect(p.functions.length).toBe(1);
+  });
+});
