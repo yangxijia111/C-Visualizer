@@ -80,7 +80,8 @@ export default function CodeEditor({ value, onChange, currentLine, errorLines }:
     const view = ref.current?.view;
     if (!view) return;
     view.dispatch({ effects: [setCurrentLine.of(currentLine), setErrorLines.of(errorLines.size > 0 ? errorLines : null)] });
-  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 源码变化时行号可能失效，重新派发高亮
+  }, [value, currentLine, errorLines]);
 
   return (
     <CodeMirror

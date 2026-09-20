@@ -288,6 +288,31 @@ function declareArray(
   draft: StepDraft,
   v: ArrayDeclarator,
 ): void {
+  // 重复执行同一声明（后向 goto 回跳）时复用已有区间
+  const existing = scope.vars.find((x) => x.name === v.name);
+  if (existing && existing.address !== null && existing.length === v.varType.length) {
+    const base0 = existing.address;
+    for (let k = 0; k < v.varType.length; k++) {
+      const cell = i.cells.get(base0 + k);
+      if (cell) cell.value = 0;
+      draft.changedAddresses.add(base0 + k);
+    }
+    if (v.initList) {
+      let addr = base0;
+      for (const el of v.initList) {
+        const val = evalExpr(i, el);
+        const cell = i.cells.get(addr);
+        if (cell) {
+          if (cell.type === 'int') cell.value = Math.trunc(val.value) | 0;
+          else if (cell.type === 'char') cell.value = val.value & 0xff;
+          else cell.value = val.value;
+          draft.changedAddresses.add(addr);
+        }
+        addr++;
+      }
+    }
+    return;
+  }
   const base: Address = i.nextAddress;
   for (let k = 0; k < v.varType.length; k++) {
     const addr = i.allocCell(v.varType.elem);

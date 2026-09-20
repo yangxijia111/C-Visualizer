@@ -127,7 +127,11 @@ export class Interpreter {
     return addr;
   }
 
-  /** 声明标量/指针变量并返回其地址 */
+  /**
+   * 声明标量/指针变量并返回其地址。
+   * 同一作用域再次执行同一声明（如后向 goto 回跳重新经过声明语句）时
+   * 复用已有单元并重置为未初始化——对应 C 语义「声明再次执行、初始化重新进行」。
+   */
   declareScalar(scope: Scope, name: string, type: import('../types').CType, node: NodeBase): Address {
     let cellType: CellType;
     let pointee: ScalarKind | undefined;
@@ -141,6 +145,19 @@ export class Interpreter {
       throw new RuntimeFailure('E_INTERNAL', '数组声明应在 execVarDecl 处理', node.line);
     } else {
       throw new RuntimeFailure('E_INTERNAL', '未知类型', node.line);
+    }
+    const existing = scope.vars.find((v) => v.name === name);
+    if (existing && existing.address !== null) {
+      const cell = this.cells.get(existing.address);
+      if (cell) {
+        cell.value = null; // 重新声明：先回到未初始化（随后初始化器会赋值）
+        cell.type = cellType;
+        cell.pointee = pointee;
+      }
+      if (this.draft) {
+        this.draft.changedAddresses.add(existing.address);
+      }
+      return existing.address;
     }
     const addr = this.allocCell(cellType, pointee);
     scope.vars.push({ name, type, address: addr });

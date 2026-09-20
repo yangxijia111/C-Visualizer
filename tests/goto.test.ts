@@ -115,3 +115,42 @@ describe('goto 基础', () => {
     expect(r.finalVar('n')?.value).toBe(0);
   });
 });
+
+describe('goto 与声明交互（审计修复回归）', () => {
+  it('后向 goto 重复经过声明：变量不重复、每轮重新初始化', async () => {
+    const r = await runSrc(`
+      int main() {
+        int i = 0;
+        int sum = 0;
+      LOOP:
+        int inc = 1;
+        i = i + inc;
+        sum = sum + i;
+        if (i < 3) goto LOOP;
+        return 0;
+      }
+    `);
+    const snap = r.steps[r.steps.length - 1].snapshot;
+    const mainScope = snap.scopes.find((s) => s.label === 'main');
+    expect(mainScope ? mainScope.vars.filter((v) => v.name === 'inc').length : -1).toBe(1);
+    expect(r.finalVar('sum')?.value).toBe(6);
+  });
+
+  it('goto 跳出两层嵌套循环', async () => {
+    const r = await runSrc(`
+      int main() {
+        int hits = 0;
+        for (int i = 0; i < 5; i++) {
+          for (int j = 0; j < 5; j++) {
+            if (i * j >= 6) goto DONE;
+            hits++;
+          }
+        }
+      DONE:
+        return 0;
+      }
+    `);
+    // i*j < 6 的组合数：i=0:5, i=1:5, i=2:3(j=0,1,2)，i=2,j=3 时 6>=6 触发 goto
+    expect(r.finalVar('hits')?.value).toBe(13);
+  });
+});

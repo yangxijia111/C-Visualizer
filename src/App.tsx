@@ -167,7 +167,7 @@ export default function App() {
           {compileErrors.map((e, i) => (
             <div key={i}>
               第{e.line}行第{e.column}列：{e.message}
-              {e.hint && <span className="hint">　建议：{e.hint}</span>}
+              {e.hint && <span className="hint"> 建议：{e.hint}</span>}
             </div>
           ))}
         </div>
