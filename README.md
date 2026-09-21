@@ -130,6 +130,7 @@ React 19 · TypeScript（strict）· Vite · vitest · ESLint · CodeMirror 6 ·
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 变更日志 |
 | [docs/P10_PUBLIC_RELEASE_HARDENING.md](docs/P10_PUBLIC_RELEASE_HARDENING.md) | v1.0.1 发布加固计划 |
 | [docs/FINAL_REPORT.md](docs/FINAL_REPORT.md) | v1.0 最终报告 |
+| [docs/V1.0.1_FINAL_REPORT.md](docs/V1.0.1_FINAL_REPORT.md) | v1.0.1 最终报告 |
 
 ## 已知限制
 
