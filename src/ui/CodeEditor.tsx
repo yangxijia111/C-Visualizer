@@ -69,18 +69,11 @@ export default function CodeEditor({ value, onChange, currentLine, errorLines }:
     [],
   );
 
+  // 任一高亮输入（含 value：行号可能随编辑失效）变化时重新派发一次即可
   useEffect(() => {
     const view = ref.current?.view;
     if (!view) return;
     view.dispatch({ effects: [setCurrentLine.of(currentLine), setErrorLines.of(errorLines.size > 0 ? errorLines : null)] });
-  }, [currentLine, errorLines]);
-
-  // 源码变化时也要刷新（行号可能失效）
-  useEffect(() => {
-    const view = ref.current?.view;
-    if (!view) return;
-    view.dispatch({ effects: [setCurrentLine.of(currentLine), setErrorLines.of(errorLines.size > 0 ? errorLines : null)] });
-  // 源码变化时行号可能失效，重新派发高亮
   }, [value, currentLine, errorLines]);
 
   return (

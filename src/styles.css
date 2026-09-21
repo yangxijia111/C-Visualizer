@@ -41,6 +41,14 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button.primary:not(:disabled):hover { background: #1d4ed8; }
 
+/* 键盘操作时焦点可见（不依赖颜色区分信息） */
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 select {
   font: inherit;
   padding: 3px 6px;
@@ -268,3 +276,18 @@ select {
 .output-panel { flex: 0.8; min-height: 46px; max-height: 90px; }
 .output-body { font-family: Consolas, monospace; }
 .output-pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-size: 13px; }
+
+/* ============ 窄窗口（≤ 860px）：纵向堆叠，保证基本可用 ============ */
+/* 桌面端仍为双栏；窄窗口不做移动端重设计，仅切换为单列 + 页面滚动 */
+@media (max-width: 860px) {
+  body { overflow: auto; }
+  .app { height: auto; min-height: 100%; }
+  .main-grid { grid-template-columns: 1fr; }
+  .left-col, .right-col { overflow: visible; }
+  .editor-wrap { flex: none; min-height: 320px; max-height: 420px; }
+  .left-col > .panel { flex: none; min-height: 140px; max-height: 240px; }
+  .right-col > .panel:nth-child(2) { flex: none; max-height: 300px; }
+  .right-col > .panel:nth-child(3) { flex: none; max-height: 220px; }
+  .timeline-row { flex-wrap: wrap; }
+  .output-panel { min-height: 60px; max-height: 140px; }
+}

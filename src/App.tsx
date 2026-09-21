@@ -8,8 +8,7 @@ import type { CompileError } from './core/errors';
 import type { RunResult, ExecutionStep } from './core/steps';
 import type { Snapshot } from './core/values';
 import { getParser } from './core/cst';
-
-const SPEEDS = [0.5, 1, 2, 4, 8];
+import { PLAYBACK_SPEEDS, nextStep, prevStep, advancePlaying, playButtonAction, timelineValue } from './ui/playback';
 
 export default function App() {
   const [source, setSource] = useState(EXAMPLES[4].code); // 默认：if 判断（完成标准样例）
@@ -20,6 +19,7 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(2);
   const [busy, setBusy] = useState(true); // wasm 加载中
+  const [parserError, setParserError] = useState<string | null>(null); // wasm 加载/解析器异常提示
   const runSeq = useRef(0);
 
   // 预热 wasm 解析器
@@ -28,6 +28,7 @@ export default function App() {
       .then(() => setBusy(false))
       .catch((e) => {
         console.error('wasm 加载失败', e);
+        setParserError('解析器（tree-sitter wasm）加载失败：请检查网络连接后刷新页面重试。');
         setBusy(false);
       });
   }, []);
@@ -52,10 +53,10 @@ export default function App() {
       if (target && (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
       if (ev.key === 'ArrowRight' && canNextRef.current) {
         setPlaying(false);
-        setCurrentStep((s) => Math.min(total - 1, s + 1));
+        setCurrentStep((s) => nextStep(s, total));
       } else if (ev.key === 'ArrowLeft' && currentStep > 0) {
         setPlaying(false);
-        setCurrentStep((s) => Math.max(0, s - 1));
+        setCurrentStep((s) => prevStep(s));
       } else if (ev.key === ' ' && total > 0) {
         ev.preventDefault();
         setPlaying((p) => !p);
@@ -70,17 +71,19 @@ export default function App() {
     if (!playing) return;
     const timer = setInterval(() => {
       setCurrentStep((s) => {
-        if (s >= total - 1) {
+        const next = advancePlaying(s, total);
+        if (next === null) {
           setPlaying(false);
           return s;
         }
-        return s + 1;
+        return next;
       });
     }, 1000 / speed);
     return () => clearInterval(timer);
   }, [playing, speed, total]);
 
   const handleRun = useCallback(async () => {
+    if (parserError) return; // 解析器不可用时禁止运行
     setPlaying(false);
     setBusy(true);
     setCompileErrors(null);
@@ -101,7 +104,7 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, [source]);
+  }, [source, parserError]);
 
   const loadExample = useCallback((id: string) => {
     const ex = EXAMPLES.find((e) => e.id === id);
@@ -125,26 +128,26 @@ export default function App() {
       {/* 顶栏 */}
       <header className="topbar">
         <div className="brand">C Visualizer</div>
-        <select value={exampleId} onChange={(e) => loadExample(e.target.value)} title="示例库">
+        <select value={exampleId} onChange={(e) => loadExample(e.target.value)} title="示例库" aria-label="选择示例">
           {EXAMPLES.map((ex) => (
             <option key={ex.id} value={ex.id}>{ex.title}</option>
           ))}
         </select>
         <div className="controls">
-          <button className="primary" onClick={handleRun} disabled={busy} title="编译并运行">
+          <button className="primary" onClick={handleRun} disabled={busy || parserError !== null} title="编译并运行">
             {busy ? '加载中…' : '▶ 运行'}
           </button>
-          <button onClick={() => { setPlaying(false); setCurrentStep((s) => Math.max(0, s - 1)); }} disabled={!canPrev || currentStep < 0} title="上一步">
+          <button onClick={() => { setPlaying(false); setCurrentStep((s) => prevStep(s)); }} disabled={!canPrev || currentStep < 0} title="上一步">
             ◀ 上一步
           </button>
-          <button onClick={() => { setPlaying(false); setCurrentStep((s) => Math.min(total - 1, s + 1)); }} disabled={!canNext} title="下一步">
+          <button onClick={() => { setPlaying(false); setCurrentStep((s) => nextStep(s, total)); }} disabled={!canNext} title="下一步">
             下一步 ▶
           </button>
           <button
             onClick={() => {
-              if (currentStep >= total - 1) { setCurrentStep(0); setPlaying(true); }
-              else if (currentStep < 0) { setCurrentStep(0); setPlaying(true); }
-              else setPlaying(!playing);
+              const action = playButtonAction(currentStep, total, playing);
+              setCurrentStep(action.step);
+              setPlaying(action.play);
             }}
             disabled={total === 0}
             title="播放 / 暂停"
@@ -155,13 +158,18 @@ export default function App() {
             ↻ 重新开始
           </button>
         </div>
-        <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} title="播放速度">
-          {SPEEDS.map((s) => <option key={s} value={s}>{s} 步/秒</option>)}
+        <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} title="播放速度" aria-label="播放速度（步/秒）">
+          {PLAYBACK_SPEEDS.map((s) => <option key={s} value={s}>{s} 步/秒</option>)}
         </select>
         <div className="step-indicator">{currentStep >= 0 ? `第 ${currentStep + 1} / ${total} 步` : `共 ${total} 步`}</div>
       </header>
 
       {/* 错误横幅 */}
+      {parserError && (
+        <div className="error-banner" role="alert">
+          {parserError}
+        </div>
+      )}
       {compileErrors && compileErrors.length > 0 && (
         <div className="error-banner">
           {compileErrors.map((e, i) => (
@@ -212,10 +220,12 @@ export default function App() {
             type="range"
             min={0}
             max={Math.max(0, total - 1)}
-            value={Math.max(0, currentStep)}
+            value={timelineValue(currentStep)}
             onChange={(e) => { setPlaying(false); setCurrentStep(Number(e.target.value)); }}
             disabled={total === 0}
             className="timeline"
+            aria-label="执行时间轴"
+            title="拖动跳转到任意步骤"
           />
           <OutputPanel snap={snapshot} />
         </div>

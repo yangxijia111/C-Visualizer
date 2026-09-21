@@ -3,6 +3,7 @@
 import type { Snapshot, Variable, StackFrame } from '../core/values';
 import { typeToString } from '../core/types';
 import type { ExecutionStep, FlowEvent } from '../core/steps';
+import { splitFlowEvents } from './flow-history';
 
 // ============ 工具 ============
 
@@ -43,7 +44,7 @@ export function VariablesPanel({ snap, changedAddresses }: VariablesPanelProps) 
   const hasAny = snap.scopes.some((s) => s.vars.length > 0);
 
   return (
-    <div className="panel">
+    <div className="panel" role="region" aria-label="变量监视器">
       <div className="panel-title">变量</div>
       <div className="panel-body">
         {!hasAny && <div className="placeholder">（暂无变量）</div>}
@@ -98,7 +99,7 @@ export function MemoryPanel({ snap, changedAddresses }: VariablesPanelProps) {
   }
 
   return (
-    <div className="panel">
+    <div className="panel" role="region" aria-label="内存与数组">
       <div className="panel-title">内存 / 数组</div>
       <div className="panel-body">
         {arrays.length === 0 && pointers.length === 0 && (
@@ -161,7 +162,7 @@ export function MemoryPanel({ snap, changedAddresses }: VariablesPanelProps) {
 export function CallStackPanel({ snap, step }: { snap: Snapshot; step: ExecutionStep | null }) {
   const frames: StackFrame[] = snap.callStack;
   return (
-    <div className="panel">
+    <div className="panel" role="region" aria-label="调用栈">
       <div className="panel-title">调用栈</div>
       <div className="panel-body">
         {frames.length === 0 && <div className="placeholder">（尚未调用 main）</div>}
@@ -219,19 +220,13 @@ function flowText(f: FlowEvent): { text: string; cls: string } {
 }
 
 export function ControlFlowPanel({ steps, currentStep }: { steps: ExecutionStep[]; currentStep: number }) {
-  const cur = steps[currentStep];
-  const history: FlowEvent[] = [];
-  for (let i = Math.max(0, currentStep - 8); i <= currentStep && i < steps.length; i++) {
-    history.push(...steps[i].flowEvents);
-  }
-  const past = history.slice(0, -1);
-  const now = cur?.flowEvents ?? [];
+  const { past, now } = splitFlowEvents(steps, currentStep);
 
   return (
-    <div className="panel">
+    <div className="panel" role="region" aria-label="控制流">
       <div className="panel-title">控制流</div>
-      <div className="panel-body">
-        {history.length === 0 && now.length === 0 && <div className="placeholder">（运行后显示控制流轨迹）</div>}
+      <div className="panel-body" role="log" aria-label="控制流轨迹">
+        {past.length === 0 && now.length === 0 && <div className="placeholder">（运行后显示控制流轨迹）</div>}
         {past.map((f, i) => {
           const { text, cls } = flowText(f);
           return <div key={`h${i}`} className={`flow-row past ${cls}`}>{text}</div>;
@@ -250,7 +245,7 @@ export function ControlFlowPanel({ steps, currentStep }: { steps: ExecutionStep[
 export function OutputPanel({ snap }: { snap: Snapshot }) {
   const lines = snap.output;
   return (
-    <div className="panel output-panel">
+    <div className="panel output-panel" role="region" aria-label="程序输出">
       <div className="panel-title">输出</div>
       <div className="panel-body output-body">
         {lines.length === 0 ? <span className="placeholder">（暂无输出）</span> : <pre className="output-pre">{lines}</pre>}
