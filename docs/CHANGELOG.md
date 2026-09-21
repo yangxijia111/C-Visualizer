@@ -2,6 +2,24 @@
 
 所有对外可见的变化记录于此。格式参考 Keep a Changelog；版本号遵循语义化版本。
 
+## [1.0.1] - 2026-09-22
+
+### Public Release Hardening
+
+- **License**：新增标准 MIT LICENSE 文件，package.json 声明 `license: MIT`，与 README 保持一致
+- **CI**：新增 GitHub Actions（`.github/workflows/ci.yml`），push(main) 与全部 PR 触发
+  lint / typecheck / test / build 质量门禁（Node 22 + 24 矩阵，npm cache）
+- **在线 Demo**：新增 GitHub Pages 自动部署（`.github/workflows/deploy-pages.yml`），
+  `--mode pages` 构建使用 `/C-Visualizer/` base，本地 dev / preview 行为不变
+- **修复**：控制流面板历史事件与当前事件严格按 step 边界分离——修复当前步含 0 个或
+  多个 FlowEvent 时的事件丢失 / 重复显示（此前 `history.slice(0, -1)` 隐含「当前步恰 1 个事件」假设）
+- **修复**：CodeEditor 合并重复的高亮 dispatch effect（currentLine / errorLines / value 任一变化只派发一次）
+- **修复**：tree-sitter wasm 加载失败时显示明确错误横幅并禁用「运行」，不再只写 console
+- **UI**：窄窗口基本可用（纵向堆叠断点）；控件补充无障碍标注（title / aria-label）
+- **README**：Public Release 化（在线 Demo、截图、项目结构、已知限制、贡献方式等）
+- **测试**：237 → 247 项（新增发布回归：FlowEvent 分离、播放边界纯逻辑、Pages base 构建产物、
+  文档与实现一致性、示例库完整性、核心导出稳定）
+
 ## [1.0.0] - 2026-09-20
 
 ### 新增

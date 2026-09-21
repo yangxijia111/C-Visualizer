@@ -1,0 +1,43 @@
+# CI：push(main) 与全部 PR 的质量门禁
+# 任一步骤失败即整体失败；不使用 continue-on-error，不跳过任何步骤
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: lint + typecheck + test + build (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: TypeScript strict 检查
+        run: npm run typecheck
+
+      - name: 全量测试
+        run: npm test
+
+      - name: 生产构建
+        run: npm run build

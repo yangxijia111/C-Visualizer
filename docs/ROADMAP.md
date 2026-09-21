@@ -60,7 +60,15 @@
 - FINAL_REPORT.md；`npm run lint && typecheck && test && build` 全绿
 - git tag v1.0.0；推送 GitHub 仓库 C-Visualizer（禁止 force push）
 
-## v1.1 候选（仅记录，不在 v1.0 实施）
+## v1.0.1 — Public Release Hardening（2026-09）
+
+- [x] 仓库审计（P10_PUBLIC_RELEASE_HARDENING.md §1）；修复 ControlFlowPanel 历史事件重复、CodeEditor 重复 Effect
+- [x] LICENSE（标准 MIT）+ CI（push/PR 质量门禁）+ GitHub Pages 自动部署（/C-Visualizer/ base）
+- [x] wasm 加载失败 UI 明确提示；可访问性基础检查；窄窗口基本可用
+- [x] README Public Release 化；文档一致性回归测试；发布回归测试套件
+- [x] v1.0.1 tag + GitHub Release
+
+## v1.1 候选（仅记录，不在 v1.0/v1.0.1 实施）
 
 - 三目运算符、位运算、printf 宽度/精度（`%5d`、`%.2f`）、二维数组
 - 字符串（char 数组）基础操作、scanf 模拟输入

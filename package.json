@@ -3,10 +3,12 @@
   "description": "面向 C 语言初学者的代码执行可视化教学工具",
   "private": true,
   "version": "1.0.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:pages": "tsc --noEmit && vite build --mode pages",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
