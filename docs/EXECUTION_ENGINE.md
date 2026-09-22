@@ -110,7 +110,38 @@ interface StackFrame {
 
 作用域栈以「深度记录」保证信号冒泡时正确弹出（`env.push/pop` 与 try/finally 配对）。
 
-**goto 与作用域**（教学约束，见 SUPPORTED_C §3）：跳入更深块时，被跳过的声明不执行，对应变量不存在 → 后续访问得到「未声明变量」运行时错误。示例代码应避免此写法；引擎行为已定义、不崩溃。
+**goto 与作用域**（v1.1.0 语义，见 SEMANTIC_MODEL §2.4）：静态检查器只允许
+「同一语句序列内跳转」与「跳出到外层序列」——跳入嵌套块 / 兄弟块 / case 体 /
+if 单语句分支在编译期拒绝（E_LABEL）。前向 goto 跳过的顶层声明在跳转时
+**补创建为未初始化**（对齐 C 块作用域：跳过初始化 = indeterminate，读取报
+E_UNINIT_READ）；后向 goto 重新经过声明时复用存储单元并重新初始化。
+
+## 4.1 运行时收敛与初始化策略（v1.1.0）
+
+所有「值进入对象」的边界共用 `src/core/coercion.ts` 的 `coerceRuntimeValue(value, target)`：
+
+| 边界 | 收敛目标 |
+| --- | --- |
+| 变量初始化 / 赋值写回（writeCell） | 声明 / 左值类型 |
+| 形参绑定（callFunction） | 形参类型（调用步骤展示转换后的值） |
+| return（execStmt 离开函数前） | 函数返回类型 |
+| 数组初始化列表元素 / 数组元素赋值 | 数组元素类型 |
+
+规则：int → `Math.trunc | 0`；char → 低 8 位（0～255）；float/double → 数值不变；
+pointer → 值不变（类型由检查器保证）。
+
+**存储期初始化策略**（`Interpreter.currentStorage`）：执行全局声明期间为 `'static'`
+（无初始化式 → 零初始化，含数组全元素与指针 NULL），进入任意函数体后为 `'auto'`
+（无初始化式 → 未初始化，读取报 E_UNINIT_READ）。带初始化列表的数组无论存储期
+都是「前缀收敛写入 + 剩余零初始化」。
+
+## 4.2 控制流归属展示（v1.1.0）
+
+`Interpreter.breakableStack` 记录进入顺序上的可中断构造（loop 携带循环类型 / switch），
+循环与 switch 执行器 try/finally 维护：`break` 的控制流事件 `from` 取栈顶
+（switch 内 break 显示「跳出 switch」）；`continue` 自栈顶向下找最近循环并标注
+真实类型（for 的 continue 说明指向更新表达式）。合法性由检查器的
+loopDepth / switchDepth 保证。
 
 ## 5. 步骤粒度规范（教学可读性优先）
 

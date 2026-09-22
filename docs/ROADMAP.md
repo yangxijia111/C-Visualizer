@@ -68,8 +68,34 @@
 - [x] README Public Release 化；文档一致性回归测试；发布回归测试套件
 - [x] v1.0.1 tag + GitHub Release
 
-## v1.1 候选（仅记录，不在 v1.0/v1.0.1 实施）
+## v1.1.0 — Semantic Conformance Hardening（2026-09）
 
+> 设计文档 P12_V1.1_SEMANTIC_HARDENING.md；语义规范 SEMANTIC_MODEL.md（新增）。
+> 目标：不是支持更多 C，而是让已支持的 C 更可信。
+
+- [x] **作用域**：TypeEnvironment 词法作用域栈（scope-env.ts + 单测）；check.ts 删除
+  扁平 env——静态可见性与运行时块作用域一致（任务书案例 1-6 全部达标）
+- [x] **运行时收敛**：统一 coercion.ts；return / 参数绑定 / 数组元素 / writeCell
+  全部走同一实现；Return Checker 类型兼容校验
+- [x] **控制流合法性**：break/continue 静态检查（loopDepth/switchDepth）；
+  breakableStack 归属展示（switch 内 break 显示「跳出 switch」）
+- [x] **初始化语义**：存储期策略——全局零初始化 / 局部（含数组）未初始化 /
+  初始化列表前缀 + 剩余补零；行为修正记入 CHANGELOG
+- [x] **goto 加固**：跳入嵌套块/兄弟块编译期拒绝（消除用户可触发 E_INTERNAL）；
+  跳过的声明补声明为未初始化
+- [x] **E_UB 静态检测**：副作用求值顺序分析（side-effects.ts）——i++ + i++、
+  i = i++、f(i++, i++)、a[i] = i++ 等编译期拒绝；赋值豁免与序列点分区
+- [x] **测试**：278 → 441+（新增 scope/coercion/control-flow/init/goto/ub/invariant/
+  property/差分语料基准）；差分测试 gcc 可用即实跑（本地 skip 记录
+  DIFFERENTIAL_COMPILER_UNAVAILABLE，CI ubuntu 实跑）
+- [x] **性能**：示例库步骤数与快照字节与 v1.0.2 完全一致，耗时同量级（无回退）
+- [x] v1.1.0 tag + GitHub Release
+
+## v1.2 候选（Runtime Architecture Hardening，仅记录）
+
+- Web Worker 执行隔离（大程序不阻塞 UI）
+- 增量执行 / checkpoint + delta snapshot（替代每步全量深拷贝）
+- 函数体内部副作用与调用点表达式的作用（跨函数 E_UB 分析）
 - 三目运算符、位运算、printf 宽度/精度（`%5d`、`%.2f`）、二维数组
 - 字符串（char 数组）基础操作、scanf 模拟输入
 - 控制流图可视化（CFG 面板）、单步表达式树展示

@@ -9,16 +9,19 @@ CompileError（编译期，run 之前）
  ├─ phase: 'parse'    → E_SYNTAX        语法错误（tree-sitter ERROR/MISSING）
  └─ phase: 'check'
      ├─ E_UNSUPPORTED  不支持的 C 特性（合法 C 但超出教学子集）
-     ├─ E_TYPE         类型错误（%作用非整型、数组赋值、指针类型不匹配…）
-     ├─ E_LABEL        标签重复 / goto 目标不存在 / 标签后无语句
+     ├─ E_TYPE         类型错误（%作用非整型、数组赋值、指针类型不匹配、
+     │                 break/continue 不在合法上下文、return 类型不兼容…）
+     ├─ E_LABEL        标签重复 / goto 目标不存在 / 跳入嵌套块等危险 goto
      ├─ E_CONST        非常量表达式用于 case 标签 / 数组长度 / 全局初始化
      ├─ E_NO_MAIN      缺少 main / 多个 main
-     └─ E_DECL         声明错误（重定义、数组初始化个数超长…）
+     ├─ E_DECL         声明错误（同一作用域重定义、数组初始化个数超长…）
+     └─ E_UB           求值顺序未定义/未指定的副作用冲突（i++ + i++、
+                       i = i++、f(i++, i++)、a[i] = i++ 等，v1.1.0 新增）
 
 RuntimeError（执行期，作为终止步骤）
  ├─ E_DIV_ZERO        除数为 0（/ 或 %）
- ├─ E_UNINIT_READ     读取未初始化标量
- ├─ E_UNDEF_VAR       使用未声明变量（含 goto 跳过声明）
+ ├─ E_UNINIT_READ     读取未初始化标量 / 未初始化数组元素 / goto 跳过的声明
+ ├─ E_UNDEF_VAR       使用未声明变量（静态检查通过但运行时不可达的路径，理论上极少）
  ├─ E_NULL_DEREF      解引用空指针 / 未初始化指针
  ├─ E_BAD_DEREF       解引用非指针
  ├─ E_ARRAY_BOUND     数组下标越界
@@ -27,6 +30,11 @@ RuntimeError（执行期，作为终止步骤）
  ├─ E_PRINTF          printf 格式符/参数错误、不支持的格式符
  └─ E_INTERNAL        引擎内部错误（防御性，正常不应出现）
 ```
+
+**E_INTERNAL 纪律（v1.1.0）**：E_INTERNAL 仅表示解释器自身缺陷。
+`compile().ok === true` 的程序执行后不允许出现 E_INTERNAL 步骤
+（tests/semantic/invariant.test.ts 持续扫描示例库与差分语料保障该不变量）。
+用户可触发的错误路径必须使用明确的编译错误或运行时错误码。
 
 ## 2. 错误对象结构
 
