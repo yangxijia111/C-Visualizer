@@ -10,6 +10,7 @@ import type { CompileError } from './errors';
 import type { CType } from './types';
 import { isScalar, isNumeric, isInteger, isPointer, isArray, typeToString } from './types';
 import { TypeEnvironment } from './scope-env';
+import { analyzeFullExpr, analyzeFullExprList } from './side-effects';
 
 /** 检查器内部的扩展类型（字符串字面量仅限 printf/puts 参数） */
 type CKind = CType | 'string';
@@ -223,6 +224,28 @@ function addErrorCode(ctx: Ctx, code: CompileError['code'], at: { line: number; 
   ctx.errors.push(makeError(code, 'check', at, message, hint));
 }
 
+/** 完整表达式的副作用顺序检查（SEMANTIC_MODEL §6.2，E_UB） */
+function checkSideEffects(e: Expr, ctx: Ctx): void {
+  for (const v of analyzeFullExpr(e)) {
+    addUBError(v, ctx);
+  }
+}
+
+/** 同区域表达式组（初始化列表）的副作用顺序检查 */
+function checkSideEffectList(es: Expr[], ctx: Ctx): void {
+  for (const v of analyzeFullExprList(es)) {
+    addUBError(v, ctx);
+  }
+}
+
+function addUBError(v: import('./side-effects').UBViolation, ctx: Ctx): void {
+  const detail = v.rule === 'double-write'
+    ? `变量「${v.name}」在同一次求值中被多次修改`
+    : `变量「${v.name}」的读取与修改在同一次求值中没有先后顺序`;
+  addErrorCode(ctx, 'E_UB', v.at, `${detail}（求值顺序未定义）`,
+    '该表达式在 C 中存在未定义行为，不应依赖求值顺序；请拆分为多条语句依次计算');
+}
+
 function checkStmt(s: Stmt, ctx: Ctx): void {
   switch (s.kind) {
     case 'var-decl':
@@ -234,6 +257,7 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
         if (v.init) {
           const t = exprType(v.init, ctx);
           if (t) checkAssignCompat(v.varType, t, v.init, ctx, v.init);
+          checkSideEffects(v.init, ctx);
         }
         if (v.initList) {
           // 数组初始化列表：元素类型必须与元素类型兼容；个数不能超（个数超在转换层查不了，这里查）
@@ -249,11 +273,14 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
             const t = exprType(el, ctx);
             if (t) checkAssignCompat(v.varType.elem, t, el, ctx);
           }
+          // 初始化列表整体是一个无序区域（C11：元素间求值顺序未指明）
+          checkSideEffectList(v.initList, ctx);
         }
       }
       break;
     case 'expr-stmt':
       exprType(s.expr, ctx);
+      checkSideEffects(s.expr, ctx);
       break;
     case 'if': {
       checkCondition(s.condition, ctx);
@@ -297,7 +324,10 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
       ctx.env.pushScope('for');
       if (s.init) checkStmt(s.init, ctx);
       if (s.condition) checkCondition(s.condition, ctx);
-      if (s.update) exprType(s.update, ctx);
+      if (s.update) {
+        exprType(s.update, ctx);
+        checkSideEffects(s.update, ctx);
+      }
       ctx.env.pushScope('block');
       ctx.labelReachable = false;
       ctx.loopDepth++;
@@ -309,6 +339,7 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
       break;
     case 'switch': {
       const dt = exprType(s.discriminant, ctx);
+      checkSideEffects(s.discriminant, ctx);
       if (dt && !isInteger(dt)) {
         addError(ctx, s, 'switch 的判别式必须是整型（int / char）', `当前类型：${typeToString(dt)}`);
       }
@@ -360,6 +391,7 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
     case 'return':
       if (s.value) {
         const t = exprType(s.value, ctx);
+        checkSideEffects(s.value, ctx);
         // return 表达式类型必须与函数返回类型赋值兼容（数值互转允许，数组/字符串拒绝）
         if (t && ctx.fn.returnType !== 'void') {
           checkAssignCompat(ctx.fn.returnType, t, s.value, ctx);
@@ -385,6 +417,7 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
 
 function checkCondition(e: Expr, ctx: Ctx): void {
   const t = exprType(e, ctx);
+  checkSideEffects(e, ctx);
   if (!t) return;
   if (t === 'string') {
     addError(ctx, e, '字符串不能作为条件');

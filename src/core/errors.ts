@@ -11,6 +11,7 @@ export type ErrorCode =
   | 'E_CONST'       // case 标签 / 数组长度 / 全局初始化需要常量表达式
   | 'E_NO_MAIN'     // 缺少 main / 多个 main / main 签名不合法
   | 'E_DECL'        // 声明错误（重定义、数组初始化超长等）
+  | 'E_UB'          // 求值顺序未定义/未指定的副作用冲突（i++ + i++ 等，编译期拒绝）
   // 运行期
   | 'E_DIV_ZERO' | 'E_UNINIT_READ' | 'E_UNDEF_VAR' | 'E_NULL_DEREF' | 'E_BAD_DEREF'
   | 'E_ARRAY_BOUND' | 'E_STACK_DEPTH' | 'E_NO_RETURN' | 'E_PRINTF' | 'E_INTERNAL';
