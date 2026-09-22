@@ -1,5 +1,7 @@
-// 语义检查：类型检查、main 校验、标签校验、printf 格式校验
-// 详见 docs/AST_SPEC.md §6 与 docs/ERROR_SPEC.md
+// 语义检查：词法作用域类型检查、main 校验、标签校验、printf 格式校验
+// 详见 docs/AST_SPEC.md §6 与 docs/ERROR_SPEC.md；作用域模型见 docs/SEMANTIC_MODEL.md §2
+// 作用域栈（TypeEnvironment）与运行时 Scope 栈层级一一对应：声明只进当前层，
+// 查找由内向外，退出块即弹出——静态可见性必须与运行时块作用域一致。
 
 import type { Program, FunctionDef, Stmt, Expr } from './ast';
 import { makeError } from './errors';
@@ -7,6 +9,7 @@ import { evalConstInt, evalConstNumber } from './convert';
 import type { CompileError } from './errors';
 import type { CType } from './types';
 import { isScalar, isNumeric, isInteger, isPointer, isArray, typeToString } from './types';
+import { TypeEnvironment } from './scope-env';
 
 /** 检查器内部的扩展类型（字符串字面量仅限 printf/puts 参数） */
 type CKind = CType | 'string';
@@ -26,11 +29,11 @@ export function checkProgram(program: Program): CompileError[] {
     fnTable.set(fn.name, fn);
   }
 
-  // 全局变量环境
-  const globalEnv = new Map<string, CType>();
+  // 全局变量环境（词法作用域栈的最底层，各函数共享只读）
+  const globalEnv = new TypeEnvironment();
   for (const g of program.globals) {
     for (const v of g.vars) {
-      if (globalEnv.has(v.name)) {
+      if (globalEnv.hasInCurrentScope(v.name)) {
         errors.push(makeError('E_DECL', 'check', g, `全局变量「${v.name}」重复定义`));
         continue;
       }
@@ -51,7 +54,7 @@ export function checkProgram(program: Program): CompileError[] {
           }
         }
       }
-      globalEnv.set(v.name, v.varType);
+      globalEnv.declare(v.name, v.varType);
     }
   }
 
@@ -77,7 +80,7 @@ export function checkProgram(program: Program): CompileError[] {
 function checkFunction(
   fn: FunctionDef,
   fnTable: Map<string, FunctionDef>,
-  globalEnv: Map<string, CType>,
+  globalEnv: TypeEnvironment,
   errors: CompileError[],
 ): void {
   // 标签检查：重复 + goto 目标存在
@@ -96,7 +99,7 @@ function checkFunction(
     }
   }
 
-  // return 与函数返回类型的匹配
+  // return 与函数返回类型的匹配（有无值；类型兼容在 checkStmt 的 return 分支按作用域检查）
   const returns: { hasValue: boolean; at: { line: number; column: number } }[] = [];
   collectReturns(fn.body.body, returns);
   for (const r of returns) {
@@ -108,14 +111,16 @@ function checkFunction(
     }
   }
 
-  // 局部环境：全局 + 参数 + 函数体内全部声明（宽松处理，不模拟块级可见性）
-  const env = new Map(globalEnv);
-  for (const p of fn.params) env.set(p.name, p.type);
-  collectLocalDecls(fn.body.body, env, errors);
-
-  // 语句遍历
-  const ctx: Ctx = { fn, fnTable, env, errors, atGlobalScope: false };
+  // 词法作用域遍历：函数作用域 = 形参 + 函数体顶层声明（同一层，与 C 一致）
+  globalEnv.pushScope('function');
+  for (const p of fn.params) {
+    if (!globalEnv.declare(p.name, p.type)) {
+      errors.push(makeError('E_DECL', 'check', fn.body, `形参「${p.name}」重复声明`));
+    }
+  }
+  const ctx: Ctx = { fn, fnTable, env: globalEnv, errors, atGlobalScope: false };
   for (const s of fn.body.body) checkStmt(s, ctx);
+  globalEnv.popScope();
 }
 
 function collectGotos(stmts: Stmt[], out: { name: string; at: { line: number; column: number } }[]): void {
@@ -156,58 +161,10 @@ function collectReturns(stmts: Stmt[], out: { hasValue: boolean; at: { line: num
   stmts.forEach(walk);
 }
 
-/**
- * 收集函数体内全部变量声明用于类型环境（宽松：跨块可见）。
- * 重复声明检查按真实块级作用域链：仅同一块内重复才报错，内层遮蔽外层合法。
- */
-function collectLocalDecls(stmts: Stmt[], env: Map<string, CType>, errors: CompileError[]): void {
-  // 作用域链：链上的每个 Map 是一个块级作用域；声明只与链上「同块」冲突
-  const walk = (s: Stmt, scopes: Set<string>[]): void => {
-    switch (s.kind) {
-      case 'var-decl':
-        for (const v of s.vars) {
-          const own = scopes[scopes.length - 1];
-          if (own.has(v.name)) {
-            errors.push(makeError('E_DECL', 'check', s, `变量「${v.name}」在同一作用域重复声明`));
-          } else {
-            own.add(v.name);
-          }
-          env.set(v.name, v.varType);
-        }
-        break;
-      case 'block':
-        s.body.forEach((child) => walk(child, [...scopes, new Set<string>()]));
-        break;
-      case 'label':
-        walk(s.stmt, scopes);
-        break;
-      case 'if':
-        walk(s.then, [...scopes, new Set<string>()]);
-        if (s.else) walk(s.else, [...scopes, new Set<string>()]);
-        break;
-      case 'while': case 'do-while':
-        walk(s.body, [...scopes, new Set<string>()]);
-        break;
-      case 'for': {
-        const forScope = [...scopes, new Set<string>()];
-        if (s.init && s.init.kind === 'var-decl') walk(s.init, forScope);
-        walk(s.body, forScope);
-        break;
-      }
-      case 'switch':
-        s.cases.forEach((c) => c.body.forEach((child) => walk(child, [...scopes, new Set<string>()])));
-        break;
-      default: break;
-    }
-  };
-  const topLevel = new Set<string>();
-  stmts.forEach((child) => walk(child, [topLevel]));
-}
-
 interface Ctx {
   fn: FunctionDef;
   fnTable: Map<string, FunctionDef>;
-  env: Map<string, CType>;
+  env: TypeEnvironment;
   errors: CompileError[];
   atGlobalScope: boolean;
 }
@@ -224,6 +181,10 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
   switch (s.kind) {
     case 'var-decl':
       for (const v of s.vars) {
+        // 声明点语义：先入当前作用域，再检查初始化式（int x = x; 引用自身 → 编译过，运行时报 E_UNINIT_READ）
+        if (!ctx.env.declare(v.name, v.varType)) {
+          addErrorCode(ctx, 'E_DECL', s, `变量「${v.name}」在同一作用域重复声明`);
+        }
         if (v.init) {
           const t = exprType(v.init, ctx);
           if (t) checkAssignCompat(v.varType, t, v.init, ctx, v.init);
@@ -250,29 +211,46 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
       break;
     case 'if': {
       checkCondition(s.condition, ctx);
+      ctx.env.pushScope('block');
       checkStmt(s.then, ctx);
-      if (s.else) checkStmt(s.else, ctx);
+      ctx.env.popScope();
+      if (s.else) {
+        ctx.env.pushScope('block');
+        checkStmt(s.else, ctx);
+        ctx.env.popScope();
+      }
       break;
     }
     case 'while':
       checkCondition(s.condition, ctx);
+      ctx.env.pushScope('block');
       checkStmt(s.body, ctx);
+      ctx.env.popScope();
       break;
     case 'do-while':
+      ctx.env.pushScope('block');
       checkStmt(s.body, ctx);
+      ctx.env.popScope();
       checkCondition(s.condition, ctx);
       break;
     case 'for':
+      // for 专属作用域：init 声明仅在 for 语句内（条件/update/body）可见
+      ctx.env.pushScope('for');
       if (s.init) checkStmt(s.init, ctx);
       if (s.condition) checkCondition(s.condition, ctx);
       if (s.update) exprType(s.update, ctx);
+      ctx.env.pushScope('block');
       checkStmt(s.body, ctx);
+      ctx.env.popScope();
+      ctx.env.popScope();
       break;
     case 'switch': {
       const dt = exprType(s.discriminant, ctx);
       if (dt && !isInteger(dt)) {
         addError(ctx, s, 'switch 的判别式必须是整型（int / char）', `当前类型：${typeToString(dt)}`);
       }
+      // switch 体整体是一个块作用域（C：case 标签不引入新作用域，各区段声明共享同一层）
+      ctx.env.pushScope('switch');
       for (const sec of s.cases) {
         for (const label of sec.labels) {
           if (label.value) {
@@ -286,6 +264,7 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
         }
         sec.body.forEach((st) => checkStmt(st, ctx));
       }
+      ctx.env.popScope();
       break;
     }
     case 'break':
@@ -300,7 +279,9 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
       if (s.value) exprType(s.value, ctx);
       break;
     case 'block':
+      ctx.env.pushScope('block');
       s.body.forEach((st) => checkStmt(st, ctx));
+      ctx.env.popScope();
       break;
   }
 }
@@ -332,7 +313,7 @@ function exprType(e: Expr, ctx: Ctx): CKind | null {
     case 'char-literal': return 'char';
     case 'string-literal': return 'string';
     case 'identifier': {
-      const t = ctx.env.get(e.name);
+      const t = ctx.env.lookup(e.name);
       if (!t) {
         addErrorCode(ctx, 'E_UNDEF_VAR', e, `使用了未声明的变量「${e.name}」`, '请先声明，例如 int x;');
         return null;
@@ -451,7 +432,7 @@ function exprType(e: Expr, ctx: Ctx): CKind | null {
       return t.pointee;
     }
     case 'array-access': {
-      const at = ctx.env.get(e.array.name);
+      const at = ctx.env.lookup(e.array.name);
       if (!at) {
         addError(ctx, e, `使用了未声明的数组「${e.array.name}」`);
         return null;
