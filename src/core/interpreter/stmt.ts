@@ -74,45 +74,56 @@ export function execStmt(i: Interpreter, s: Stmt): void {
 
 /** while：每次条件判断为独立步骤 */
 function execWhile(i: Interpreter, s: Extract<Stmt, { kind: 'while' }>): void {
-  for (;;) {
-    i.beginStep(s, 'while-condition', 'condition');
-    const v = evalExpr(i, s.condition);
-    const entered = v.value !== 0;
-    i.draft?.flowEvents.push({ kind: 'loop-check', loopType: 'while', conditionText: s.condition.text, value: v.value, entered });
-    i.finishStep(descLoopCheck('while', s.condition.text, v, entered));
-    if (!entered) break;
+  i.breakableStack.push({ kind: 'loop', loopType: 'while' });
+  try {
+    for (;;) {
+      i.beginStep(s, 'while-condition', 'condition');
+      const v = evalExpr(i, s.condition);
+      const entered = v.value !== 0;
+      i.draft?.flowEvents.push({ kind: 'loop-check', loopType: 'while', conditionText: s.condition.text, value: v.value, entered });
+      i.finishStep(descLoopCheck('while', s.condition.text, v, entered));
+      if (!entered) break;
 
-    try {
-      execStmt(i, s.body);
-    } catch (e) {
-      if (e instanceof BreakSignal) break;
-      if (e instanceof ContinueSignal) continue;
-      throw e;
+      try {
+        execStmt(i, s.body);
+      } catch (e) {
+        if (e instanceof BreakSignal) break;
+        if (e instanceof ContinueSignal) continue;
+        throw e;
+      }
     }
+  } finally {
+    i.breakableStack.pop();
   }
 }
 
 /** do-while：先执行后判断 */
 function execDoWhile(i: Interpreter, s: Extract<Stmt, { kind: 'do-while' }>): void {
-  for (;;) {
-    try {
-      execStmt(i, s.body);
-    } catch (e) {
-      if (e instanceof BreakSignal) break;
-      if (!(e instanceof ContinueSignal)) throw e;
+  i.breakableStack.push({ kind: 'loop', loopType: 'do-while' });
+  try {
+    for (;;) {
+      try {
+        execStmt(i, s.body);
+      } catch (e) {
+        if (e instanceof BreakSignal) break;
+        if (!(e instanceof ContinueSignal)) throw e;
+      }
+      i.beginStep(s, 'do-while-condition', 'condition');
+      const v = evalExpr(i, s.condition);
+      const entered = v.value !== 0;
+      i.draft?.flowEvents.push({ kind: 'loop-check', loopType: 'do-while', conditionText: s.condition.text, value: v.value, entered });
+      i.finishStep(descLoopCheck('do-while', s.condition.text, v, entered));
+      if (!entered) break;
     }
-    i.beginStep(s, 'do-while-condition', 'condition');
-    const v = evalExpr(i, s.condition);
-    const entered = v.value !== 0;
-    i.draft?.flowEvents.push({ kind: 'loop-check', loopType: 'do-while', conditionText: s.condition.text, value: v.value, entered });
-    i.finishStep(descLoopCheck('do-while', s.condition.text, v, entered));
-    if (!entered) break;
+  } finally {
+    i.breakableStack.pop();
   }
 }
 
 /** for：init / 每次条件判断 / update 各自独立步骤；init 变量作用域限于循环 */
 function execFor(i: Interpreter, s: Extract<Stmt, { kind: 'for' }>): void {
   i.pushScope('for', `for(第${s.line}行)`);
+  i.breakableStack.push({ kind: 'loop', loopType: 'for' });
   try {
     if (s.init) {
       if (s.init.kind === 'var-decl') {
@@ -144,6 +155,7 @@ function execFor(i: Interpreter, s: Extract<Stmt, { kind: 'for' }>): void {
       }
     }
   } finally {
+    i.breakableStack.pop();
     i.popScope();
   }
 }
@@ -151,16 +163,22 @@ function execFor(i: Interpreter, s: Extract<Stmt, { kind: 'for' }>): void {
 // ============ break / continue ============
 
 function execBreak(i: Interpreter, s: Extract<Stmt, { kind: 'break' }>): void {
+  // 就近原则：跳出栈顶最近的可中断构造（循环或 switch）
+  const target = i.breakableStack[i.breakableStack.length - 1];
+  const from = target?.kind ?? 'loop';
   i.beginStep(s, 'break');
-  i.draft?.flowEvents.push({ kind: 'break', from: 'loop' });
-  i.finishStep(descBreak('loop'));
+  i.draft?.flowEvents.push({ kind: 'break', from, loopType: target?.loopType });
+  i.finishStep(descBreak(from, target?.loopType));
   throw new BreakSignal();
 }
 
 function execContinue(i: Interpreter, s: Extract<Stmt, { kind: 'continue' }>): void {
+  // continue 只作用于循环：自栈顶向下找最近的循环（跳过 switch）
+  const loop = [...i.breakableStack].reverse().find((b) => b.kind === 'loop');
+  const loopType = loop?.loopType ?? 'while';
   i.beginStep(s, 'continue');
-  i.draft?.flowEvents.push({ kind: 'continue', loopType: 'loop' });
-  i.finishStep(descContinue('loop', false));
+  i.draft?.flowEvents.push({ kind: 'continue', loopType });
+  i.finishStep(descContinue(loopType, loopType === 'for'));
   throw new ContinueSignal();
 }
 
@@ -171,64 +189,69 @@ function execContinue(i: Interpreter, s: Extract<Stmt, { kind: 'continue' }>): v
  * break（BreakSignal）跳出；穿透边界生成独立步骤。
  */
 function execSwitch(i: Interpreter, s: Extract<Stmt, { kind: 'switch' }>): void {
-  // 步骤 1：判别式求值
-  i.beginStep(s, 'switch-discriminant', 'discriminant');
-  const dv = evalExpr(i, s.discriminant);
-  i.draft?.flowEvents.push({ kind: 'switch-discriminant', text: s.discriminant.text, value: dv.value });
-  i.finishStep(descSwitchDisc(s.discriminant.text, dv));
-
-  // 步骤 2：匹配区段
-  let matchIdx = -1;
-  let matchedLabel: string | null = null;
-  let defaultIdx = -1;
-  for (let k = 0; k < s.cases.length; k++) {
-    const sec = s.cases[k];
-    for (const label of sec.labels) {
-      if (label.isDefault) {
-        if (defaultIdx < 0) defaultIdx = k;
-        continue;
-      }
-      if (label.value && evalExprConst(i, label.value) === dv.value) {
-        matchIdx = k;
-        matchedLabel = `case ${label.value.text}`;
-        break;
-      }
-    }
-    if (matchIdx >= 0) break;
-  }
-  if (matchIdx < 0 && defaultIdx >= 0) {
-    matchIdx = defaultIdx;
-    matchedLabel = 'default';
-  }
-
-  i.beginStep(s, 'case-check', 'match');
-  i.draft?.flowEvents.push({ kind: 'case-match', caseText: matchedLabel ?? '无匹配', matched: matchIdx >= 0 });
-  i.finishStep(descCaseMatch(matchedLabel, dv, matchIdx >= 0));
-
-  if (matchIdx < 0) return;
-
-  // 顺序执行各区段（穿透）：每个区段执行完后若无 break，生成穿透步骤
+  i.breakableStack.push({ kind: 'switch' });
   try {
-    for (let k = matchIdx; k < s.cases.length; k++) {
+    // 步骤 1：判别式求值
+    i.beginStep(s, 'switch-discriminant', 'discriminant');
+    const dv = evalExpr(i, s.discriminant);
+    i.draft?.flowEvents.push({ kind: 'switch-discriminant', text: s.discriminant.text, value: dv.value });
+    i.finishStep(descSwitchDisc(s.discriminant.text, dv));
+
+    // 步骤 2：匹配区段
+    let matchIdx = -1;
+    let matchedLabel: string | null = null;
+    let defaultIdx = -1;
+    for (let k = 0; k < s.cases.length; k++) {
       const sec = s.cases[k];
-      for (const st of sec.body) {
-        execStmt(i, st);
+      for (const label of sec.labels) {
+        if (label.isDefault) {
+          if (defaultIdx < 0) defaultIdx = k;
+          continue;
+        }
+        if (label.value && evalExprConst(i, label.value) === dv.value) {
+          matchIdx = k;
+          matchedLabel = `case ${label.value.text}`;
+          break;
+        }
       }
-      if (k < s.cases.length - 1) {
-        // 未 break → 穿透
-        const fromCase = sectionLabelName(s, k);
-        const toCase = sectionLabelName(s, k + 1);
-        i.beginStep(s, 'case-fallthrough', 'fallthrough');
-        i.draft?.flowEvents.push({ kind: 'case-fallthrough', fromCase, toCase });
-        i.finishStep(descFallThrough(fromCase, toCase));
+      if (matchIdx >= 0) break;
+    }
+    if (matchIdx < 0 && defaultIdx >= 0) {
+      matchIdx = defaultIdx;
+      matchedLabel = 'default';
+    }
+
+    i.beginStep(s, 'case-check', 'match');
+    i.draft?.flowEvents.push({ kind: 'case-match', caseText: matchedLabel ?? '无匹配', matched: matchIdx >= 0 });
+    i.finishStep(descCaseMatch(matchedLabel, dv, matchIdx >= 0));
+
+    if (matchIdx < 0) return;
+
+    // 顺序执行各区段（穿透）：每个区段执行完后若无 break，生成穿透步骤
+    try {
+      for (let k = matchIdx; k < s.cases.length; k++) {
+        const sec = s.cases[k];
+        for (const st of sec.body) {
+          execStmt(i, st);
+        }
+        if (k < s.cases.length - 1) {
+          // 未 break → 穿透
+          const fromCase = sectionLabelName(s, k);
+          const toCase = sectionLabelName(s, k + 1);
+          i.beginStep(s, 'case-fallthrough', 'fallthrough');
+          i.draft?.flowEvents.push({ kind: 'case-fallthrough', fromCase, toCase });
+          i.finishStep(descFallThrough(fromCase, toCase));
+        }
       }
+    } catch (e) {
+      if (e instanceof BreakSignal) {
+        // break 跳出 switch 的步骤由 break 语句自身生成
+        return;
+      }
+      throw e;
     }
-  } catch (e) {
-    if (e instanceof BreakSignal) {
-      // break 跳出 switch 的步骤由 break 语句自身生成
-      return;
-    }
-    throw e;
+  } finally {
+    i.breakableStack.pop();
   }
 }
 

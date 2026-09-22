@@ -118,7 +118,7 @@ function checkFunction(
       errors.push(makeError('E_DECL', 'check', fn.body, `形参「${p.name}」重复声明`));
     }
   }
-  const ctx: Ctx = { fn, fnTable, env: globalEnv, errors, atGlobalScope: false };
+  const ctx: Ctx = { fn, fnTable, env: globalEnv, errors, atGlobalScope: false, loopDepth: 0, switchDepth: 0 };
   for (const s of fn.body.body) checkStmt(s, ctx);
   globalEnv.popScope();
 }
@@ -167,6 +167,10 @@ interface Ctx {
   env: TypeEnvironment;
   errors: CompileError[];
   atGlobalScope: boolean;
+  /** 循环嵌套深度（break/continue 合法性；switch 不计入） */
+  loopDepth: number;
+  /** switch 嵌套深度（仅 break 合法性） */
+  switchDepth: number;
 }
 
 function addError(ctx: Ctx, at: { line: number; column: number }, message: string, hint?: string): void {
@@ -224,12 +228,16 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
     case 'while':
       checkCondition(s.condition, ctx);
       ctx.env.pushScope('block');
+      ctx.loopDepth++;
       checkStmt(s.body, ctx);
+      ctx.loopDepth--;
       ctx.env.popScope();
       break;
     case 'do-while':
       ctx.env.pushScope('block');
+      ctx.loopDepth++;
       checkStmt(s.body, ctx);
+      ctx.loopDepth--;
       ctx.env.popScope();
       checkCondition(s.condition, ctx);
       break;
@@ -240,7 +248,9 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
       if (s.condition) checkCondition(s.condition, ctx);
       if (s.update) exprType(s.update, ctx);
       ctx.env.pushScope('block');
+      ctx.loopDepth++;
       checkStmt(s.body, ctx);
+      ctx.loopDepth--;
       ctx.env.popScope();
       ctx.env.popScope();
       break;
@@ -251,6 +261,7 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
       }
       // switch 体整体是一个块作用域（C：case 标签不引入新作用域，各区段声明共享同一层）
       ctx.env.pushScope('switch');
+      ctx.switchDepth++;
       for (const sec of s.cases) {
         for (const label of sec.labels) {
           if (label.value) {
@@ -264,11 +275,22 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
         }
         sec.body.forEach((st) => checkStmt(st, ctx));
       }
+      ctx.switchDepth--;
       ctx.env.popScope();
       break;
     }
     case 'break':
+      // break 合法 ⇔ 处于循环或 switch 中（SEMANTIC_MODEL §4）
+      if (ctx.loopDepth === 0 && ctx.switchDepth === 0) {
+        addError(ctx, s, 'break 只能出现在循环或 switch 语句内部', 'break 会跳出最近的一层循环或 switch');
+      }
+      break;
     case 'continue':
+      // continue 合法 ⇔ 处于循环中（switch 不提供 continue 上下文）
+      if (ctx.loopDepth === 0) {
+        addError(ctx, s, 'continue 只能出现在循环语句内部', 'continue 会跳到最近一层循环的下一轮（for 先执行更新表达式）');
+      }
+      break;
     case 'goto':
     case 'empty':
       break;

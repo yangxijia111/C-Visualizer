@@ -76,6 +76,11 @@ export class Interpreter {
   /** 函数表（调用解析用） */
   fnTable: Map<string, FunctionDef> = new Map();
   status: ExecutionStep['status'] = 'ok';
+  /**
+   * 可中断构造栈（loop/switch，按进入顺序）：break 归属栈顶最近的构造，
+   * continue 归属栈顶向下最近的循环（合法性由检查器保证，此处仅用于正确展示）。
+   */
+  breakableStack: { kind: 'loop' | 'switch'; loopType?: 'while' | 'do-while' | 'for' }[] = [];
   private startTime = 0;
   readonly opts: Required<RunOptions>;
 
