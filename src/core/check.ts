@@ -276,7 +276,13 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
       checkStmt(s.stmt, ctx);
       break;
     case 'return':
-      if (s.value) exprType(s.value, ctx);
+      if (s.value) {
+        const t = exprType(s.value, ctx);
+        // return 表达式类型必须与函数返回类型赋值兼容（数值互转允许，数组/字符串拒绝）
+        if (t && ctx.fn.returnType !== 'void') {
+          checkAssignCompat(ctx.fn.returnType, t, s.value, ctx);
+        }
+      }
       break;
     case 'block':
       ctx.env.pushScope('block');

@@ -7,6 +7,7 @@ import { isArray } from '../types';
 import type { Interpreter, StepDraft } from './index';
 import { RuntimeFailure, ReturnSignal, BreakSignal, ContinueSignal, GotoSignal } from './index';
 import { evalExpr } from './expr';
+import { coerceRuntimeValue } from '../coercion';
 import {
   descVarDecl, descAssign, descExprStmt, descIfCondition, descIfBranch,
   descLoopCheck, descForUpdate, descBreak, descContinue,
@@ -35,7 +36,9 @@ export function execStmt(i: Interpreter, s: Stmt): void {
     }
     case 'return': {
       const value = s.value ? evalExpr(i, s.value) : undefined;
-      throw new ReturnSignal(value);
+      // 返回值在离开函数前强制收敛到函数返回类型（SEMANTIC_MODEL §3.3）
+      const coerced = value && i.currentFn ? coerceRuntimeValue(value, i.currentFn.returnType) : value;
+      throw new ReturnSignal(coerced);
     }
     case 'empty':
       break;
@@ -303,9 +306,8 @@ function declareArray(
         const val = evalExpr(i, el);
         const cell = i.cells.get(addr);
         if (cell) {
-          if (cell.type === 'int') cell.value = Math.trunc(val.value) | 0;
-          else if (cell.type === 'char') cell.value = val.value & 0xff;
-          else cell.value = val.value;
+          // 元素写入统一走 coercion（SEMANTIC_MODEL §3.2）
+          cell.value = coerceRuntimeValue(val, v.varType.elem).value;
           draft.changedAddresses.add(addr);
         }
         addr++;
@@ -327,12 +329,10 @@ function declareArray(
     let addr = base;
     for (const el of v.initList) {
       const val = evalExpr(i, el);
-      // 元素写入（直接收敛到元素类型）
+      // 元素写入统一走 coercion（SEMANTIC_MODEL §3.2）
       const cell = i.cells.get(addr);
       if (cell) {
-        if (cell.type === 'int') cell.value = Math.trunc(val.value) | 0;
-        else if (cell.type === 'char') cell.value = val.value & 0xff;
-        else cell.value = val.value;
+        cell.value = coerceRuntimeValue(val, v.varType.elem).value;
         draft.changedAddresses.add(addr);
       }
       addr++;

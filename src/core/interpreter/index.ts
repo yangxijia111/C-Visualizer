@@ -12,6 +12,8 @@ import {
 } from '../explain';
 import { execStmt } from './stmt';
 import { valueToDisplay } from '../values';
+import { coerceRuntimeValue } from '../coercion';
+import type { CType } from '../types';
 
 /** 运行时错误信号（由外层转为终止步骤） */
 export class RuntimeFailure extends Error {
@@ -347,23 +349,26 @@ export class Interpreter {
     const savedLabels = this.currentLabels;
     this.currentLabels = collectLabels(fn.body.body);
     const scope = this.pushScope('function', fn.name);
+    // 实参在绑定到形参前统一收敛到形参类型（SEMANTIC_MODEL §3.4）；
+    // 调用步骤的展示与事件也使用转换后的值
+    const boundArgs = fn.params.map((p, idx) => coerceRuntimeValue(args[idx], p.type));
     for (let idx = 0; idx < fn.params.length; idx++) {
       const p = fn.params[idx];
       const pseudo = { line: callLine, endLine: callLine, column: 1, endColumn: 1, text: p.name };
       const addr = this.declareScalar(scope, p.name, p.type, pseudo);
-      this.writeCell(addr, args[idx], pseudo);
+      this.writeCell(addr, boundArgs[idx], pseudo);
     }
     const frame = { functionName: fn.name, scopeId: scope.id, callLine };
     this.callStack.push(frame);
 
     // 调用步骤
-    const argsText = fn.params.map((p, idx) => p.name + ' = ' + valueToDisplay(args[idx])).join('，');
+    const argsText = fn.params.map((p, idx) => p.name + ' = ' + valueToDisplay(boundArgs[idx])).join('，');
     const anchor = { line: callLine, endLine: callLine, column: 1, endColumn: 1, text: opts?.callText ?? fn.name };
     this.beginStep(anchor, 'call');
     this.draft?.flowEvents.push({
       kind: 'call',
       functionName: fn.name,
-      args: fn.params.map((p, idx) => p.name + ' = ' + valueToDisplay(args[idx] ?? intValue0f())),
+      args: fn.params.map((p, idx) => p.name + ' = ' + valueToDisplay(boundArgs[idx] ?? intValue0f())),
     });
     this.finishStep(
       mainStart
@@ -523,17 +528,10 @@ export function cellToValue(cell: MemoryCell): RuntimeValue {
   return { type: cell.type, value: cell.value as number, pointee: cell.pointee };
 }
 
-/** 把运行时值收敛到目标单元的存储表示 */
+/** 把运行时值收敛到目标单元的存储表示（统一走 coercion 模块） */
 export function coerceToCell(cell: MemoryCell, v: RuntimeValue): number {
-  switch (cell.type) {
-    case 'int':
-      return Math.trunc(v.value) | 0;
-    case 'char':
-      return v.value & 0xff;
-    case 'float':
-    case 'double':
-      return v.value;
-    case 'pointer':
-      return v.value;
-  }
+  const target: CType = cell.type === 'pointer'
+    ? { kind: 'pointer', pointee: cell.pointee ?? 'int' }
+    : cell.type;
+  return coerceRuntimeValue(v, target).value;
 }
