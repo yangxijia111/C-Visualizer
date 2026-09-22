@@ -66,7 +66,8 @@ describe('goto 基础', () => {
     expect(r.ok).toBe(true);
   });
 
-  it('goto 向前跳过未执行的声明 → 后续访问报未声明', async () => {
+  it('goto 向前跳过未执行的声明：跳过的变量补声明为未初始化（v1.1.0）', async () => {
+    // 跳过声明且未使用 → 正常结束
     const r = await runSrc(`
       int main() {
         goto LATER;
@@ -75,8 +76,18 @@ describe('goto 基础', () => {
         return 0;
       }
     `);
-    // 跳过声明本身不报错（hidden 未被使用）
     expect(r.ok).toBe(true);
+    // 跳过后引用 → E_UNINIT_READ（对齐 C 块作用域：跳过初始化 = indeterminate）
+    const r2 = await runSrc(`
+      int main() {
+        goto LATER;
+        int hidden = 5;
+        LATER:
+        printf("%d", hidden);
+        return 0;
+      }
+    `);
+    expect(r2.errorCode()).toBe('E_UNINIT_READ');
   });
 
   it('多个标签顺序执行', async () => {
