@@ -9,6 +9,7 @@ import type { RunResult, ExecutionStep } from './core/steps';
 import type { Snapshot } from './core/values';
 import { getParser } from './core/cst';
 import { PLAYBACK_SPEEDS, nextStep, prevStep, advancePlaying, playButtonAction, timelineValue } from './ui/playback';
+import { nextDirtyState, shouldDisablePlayback, shouldDisableRun, visibleCurrentLine, isStaleResult } from './ui/run-state';
 
 export default function App() {
   const [source, setSource] = useState(EXAMPLES[4].code); // 默认：if 判断（完成标准样例）
@@ -17,6 +18,7 @@ export default function App() {
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [currentStep, setCurrentStep] = useState(-1); // -1 = 未开始（显示初始快照）
   const [playing, setPlaying] = useState(false);
+  const [sourceDirty, setSourceDirty] = useState(false); // 源码相对上一次成功运行已被修改（旧结果 = 上一次运行）
   const [speed, setSpeed] = useState(2);
   const [busy, setBusy] = useState(true); // wasm 加载中
   const [parserError, setParserError] = useState<string | null>(null); // wasm 加载/解析器异常提示
@@ -39,6 +41,7 @@ export default function App() {
     ? (currentStep < 0 ? runResult.initialSnapshot : steps[currentStep].snapshot)
     : { scopes: [], cells: {}, callStack: [], nextAddress: 1, output: '' };
   const cur = currentStep >= 0 && currentStep < total ? steps[currentStep] : null;
+  const playbackLocked = shouldDisablePlayback({ busy, parserError, sourceDirty, total });
 
   const errorLines = useMemo(() => {
     const m = new Map<number, string>();
@@ -46,18 +49,20 @@ export default function App() {
     return m;
   }, [compileErrors]);
 
-  // 键盘快捷键：←/→ 步进，空格播放/暂停（编辑器未聚焦时）
+  // 键盘快捷键：←/→ 步进，空格播放/暂停（编辑器未聚焦时；播放锁定时一律不响应）
+  const playbackLockedRef = useRef(playbackLocked);
+  playbackLockedRef.current = playbackLocked;
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       const target = ev.target as HTMLElement;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
-      if (ev.key === 'ArrowRight' && canNextRef.current) {
+      if (ev.key === 'ArrowRight' && canNextRef.current && !playbackLockedRef.current) {
         setPlaying(false);
         setCurrentStep((s) => nextStep(s, total));
-      } else if (ev.key === 'ArrowLeft' && currentStep > 0) {
+      } else if (ev.key === 'ArrowLeft' && currentStep > 0 && !playbackLockedRef.current) {
         setPlaying(false);
         setCurrentStep((s) => prevStep(s));
-      } else if (ev.key === ' ' && total > 0) {
+      } else if (ev.key === ' ' && total > 0 && !playbackLockedRef.current) {
         ev.preventDefault();
         setPlaying((p) => !p);
       }
@@ -90,9 +95,8 @@ export default function App() {
     try {
       const compiled = await compile(source);
       if (!compiled.ok) {
+        // 编译失败：旧 runResult 保留但继续标记为旧结果（sourceDirty 不变 → 播放控制保持禁用）
         setCompileErrors(compiled.errors);
-        setRunResult(null);
-        setCurrentStep(-1);
         return;
       }
       const seq = ++runSeq.current;
@@ -101,10 +105,18 @@ export default function App() {
       const result = runProgram(compiled.program, source);
       setRunResult(result);
       setCurrentStep(0);
+      setSourceDirty((d) => nextDirtyState(d, { type: 'run-success' }));
     } finally {
       setBusy(false);
     }
   }, [source, parserError]);
+
+  // 编辑器输入：源码一旦变化，旧 runResult 即为「上一次运行」的结果，停止播放
+  const handleSourceChange = useCallback((v: string) => {
+    setSource(v);
+    setSourceDirty((d) => nextDirtyState(d, { type: 'edit' }));
+    setPlaying(false);
+  }, []);
 
   const loadExample = useCallback((id: string) => {
     const ex = EXAMPLES.find((e) => e.id === id);
@@ -115,6 +127,7 @@ export default function App() {
     setRunResult(null);
     setCurrentStep(-1);
     setPlaying(false);
+    setSourceDirty((d) => nextDirtyState(d, { type: 'load-example' }));
   }, []);
 
   const canNext = currentStep < total - 1;
@@ -122,6 +135,7 @@ export default function App() {
   const canNextRef = useRef(canNext);
   canNextRef.current = canNext;
   const lastStep = currentStep >= 0 ? steps[currentStep] : null;
+  const staleResult = isStaleResult(sourceDirty, runResult);
 
   return (
     <div className="app">
@@ -134,13 +148,13 @@ export default function App() {
           ))}
         </select>
         <div className="controls">
-          <button className="primary" onClick={handleRun} disabled={busy || parserError !== null} title="编译并运行">
+          <button className="primary" onClick={handleRun} disabled={shouldDisableRun(busy, parserError)} title="编译并运行">
             {busy ? '加载中…' : '▶ 运行'}
           </button>
-          <button onClick={() => { setPlaying(false); setCurrentStep((s) => prevStep(s)); }} disabled={!canPrev || currentStep < 0} title="上一步">
+          <button onClick={() => { setPlaying(false); setCurrentStep((s) => prevStep(s)); }} disabled={playbackLocked || !canPrev} title="上一步">
             ◀ 上一步
           </button>
-          <button onClick={() => { setPlaying(false); setCurrentStep((s) => nextStep(s, total)); }} disabled={!canNext} title="下一步">
+          <button onClick={() => { setPlaying(false); setCurrentStep((s) => nextStep(s, total)); }} disabled={playbackLocked || !canNext} title="下一步">
             下一步 ▶
           </button>
           <button
@@ -149,12 +163,12 @@ export default function App() {
               setCurrentStep(action.step);
               setPlaying(action.play);
             }}
-            disabled={total === 0}
+            disabled={playbackLocked}
             title="播放 / 暂停"
           >
             {playing ? '⏸ 暂停' : '▶ 播放'}
           </button>
-          <button onClick={() => { setPlaying(false); setCurrentStep(0); }} disabled={currentStep <= 0} title="重新开始">
+          <button onClick={() => { setPlaying(false); setCurrentStep(0); }} disabled={playbackLocked || currentStep <= 0} title="重新开始">
             ↻ 重新开始
           </button>
         </div>
@@ -181,14 +195,24 @@ export default function App() {
         </div>
       )}
 
+      {/* 旧结果提示横幅：源码已修改，右侧可视化仍为上一次运行的数据 */}
+      {staleResult && (
+        <div className="stale-result-banner" role="status">
+          <span>⚠ 源码已修改，当前可视化结果来自上一次运行，请重新运行。</span>
+          <button className="rerun-btn" onClick={handleRun} disabled={shouldDisableRun(busy, parserError)} title="用当前源码重新编译并运行">
+            重新运行
+          </button>
+        </div>
+      )}
+
       {/* 主区域 */}
       <div className="main-grid">
         <div className="left-col">
           <div className="editor-wrap">
             <CodeEditor
               value={source}
-              onChange={(v) => setSource(v)}
-              currentLine={cur ? cur.line : null}
+              onChange={handleSourceChange}
+              currentLine={visibleCurrentLine(sourceDirty, cur)}
               errorLines={errorLines}
             />
           </div>
@@ -222,7 +246,7 @@ export default function App() {
             max={Math.max(0, total - 1)}
             value={timelineValue(currentStep)}
             onChange={(e) => { setPlaying(false); setCurrentStep(Number(e.target.value)); }}
-            disabled={total === 0}
+            disabled={playbackLocked}
             className="timeline"
             aria-label="执行时间轴"
             title="拖动跳转到任意步骤"

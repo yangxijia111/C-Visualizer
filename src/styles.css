@@ -91,6 +91,25 @@ select {
 }
 .error-banner .hint { color: var(--warn); }
 
+/* ============ 旧结果提示横幅（源码已修改，结果来自上一次运行） ============ */
+.stale-result-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--changed-bg);
+  color: #92400e;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--changed-border);
+  font-size: 13px;
+}
+.stale-result-banner .rerun-btn {
+  background: var(--panel);
+  border-color: var(--warn);
+  color: #92400e;
+  font-weight: 600;
+}
+
 /* ============ 主网格 ============ */
 .main-grid {
   flex: 1;
