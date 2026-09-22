@@ -2,7 +2,7 @@
   "name": "c-visualizer",
   "description": "面向 C 语言初学者的代码执行可视化教学工具",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "license": "MIT",
   "type": "module",
   "scripts": {
