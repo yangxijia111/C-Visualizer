@@ -1,0 +1,117 @@
+{
+  "meta": {
+    "generatedAt": "2026-09-22T22:06:41.265Z",
+    "node": "v24.19.0",
+    "platform": "win32 x64",
+    "commit": "c8a505c",
+    "phase": "baseline-v1.1-full-snapshot-main-thread",
+    "notes": [
+      "runMsMedian 即 v1.1 主线程阻塞时长代理（解释器同步运行在 UI 主线程）。",
+      "traceJsonBytesEstimated 为快照序列化体积抽样估算（100 个采样点线性放大）。",
+      "heapUsedDeltaBytes 在强制 gc 前后测量，为 Trace 持有内存的代理值。",
+      "seek1000Ms 为 1000 次随机步跳转（读 steps[i].snapshot）耗时。"
+    ]
+  },
+  "results": [
+    {
+      "name": "small-sum-100steps",
+      "status": "completed",
+      "steps": 95,
+      "cells": 2,
+      "scopes": 2,
+      "outputBytes": 0,
+      "compileMsMedian": 1.78,
+      "runMsMedian": 2.39,
+      "runMsAll": [
+        1.71,
+        2.39,
+        6.19,
+        22.25,
+        1.66
+      ],
+      "traceJsonBytesEstimated": 70416,
+      "heapUsedDeltaBytes": 179768,
+      "seek1000Ms": 0.59
+    },
+    {
+      "name": "medium-array-100cells",
+      "status": "completed",
+      "steps": 1562,
+      "cells": 102,
+      "scopes": 2,
+      "outputBytes": 0,
+      "compileMsMedian": 33.69,
+      "runMsMedian": 214.07,
+      "runMsAll": [
+        182.42,
+        210.16,
+        214.07,
+        223.26,
+        286.74
+      ],
+      "traceJsonBytesEstimated": 6181109,
+      "heapUsedDeltaBytes": 11882736,
+      "seek1000Ms": 0.43
+    },
+    {
+      "name": "large-array-500cells-step-limit",
+      "status": "step-limit",
+      "steps": 10001,
+      "cells": 502,
+      "scopes": 2,
+      "outputBytes": 0,
+      "compileMsMedian": 2.51,
+      "runMsMedian": 3556.37,
+      "runMsAll": [
+        4298.64,
+        4555.68,
+        3458.15,
+        3393.01,
+        3556.37
+      ],
+      "traceJsonBytesEstimated": 170217087,
+      "heapUsedDeltaBytes": 302016264,
+      "seek1000Ms": 0.98
+    },
+    {
+      "name": "recursion-fib12",
+      "status": "completed",
+      "steps": 1863,
+      "cells": 466,
+      "scopes": 2,
+      "outputBytes": 0,
+      "compileMsMedian": 1.15,
+      "runMsMedian": 377.68,
+      "runMsAll": [
+        430.9,
+        360.82,
+        363.46,
+        436.12,
+        377.68
+      ],
+      "traceJsonBytesEstimated": 16647172,
+      "heapUsedDeltaBytes": 31373952,
+      "seek1000Ms": 0.55
+    },
+    {
+      "name": "goto-loop-200",
+      "status": "completed",
+      "steps": 1003,
+      "cells": 2,
+      "scopes": 2,
+      "outputBytes": 0,
+      "compileMsMedian": 1.2,
+      "runMsMedian": 37.33,
+      "runMsAll": [
+        37.56,
+        38.3,
+        34.38,
+        37.33,
+        27.85
+      ],
+      "traceJsonBytesEstimated": 657270,
+      "heapUsedDeltaBytes": 1582400,
+      "seek1000Ms": 0.2
+    }
+  ]
+}
