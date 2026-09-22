@@ -317,14 +317,17 @@ type ArrayDeclarator = VarDeclarator & { varType: { kind: 'array'; elem: 'int' |
  * 一维数组：分配连续地址区间。初始化策略（SEMANTIC_MODEL §5）：
  * - 带初始化列表（含 {}）：前缀逐元素收敛写入，其余元素零初始化；
  * - 无初始化列表：静态存储期（全局）全元素零；自动存储期（局部）全元素未初始化。
+ * skipInit = true 时忽略初始化列表（前向 goto 跳过声明 → 只补声明，不执行初始化）。
  */
 function declareArray(
   i: Interpreter,
   scope: Scope,
-  draft: StepDraft,
+  draft: StepDraft | null,
   v: ArrayDeclarator,
+  skipInit = false,
 ): void {
-  const fill: number | null = v.initList || i.currentStorage === 'static' ? 0 : null;
+  const hasInit = !!v.initList && !skipInit;
+  const fill: number | null = hasInit || i.currentStorage === 'static' ? 0 : null;
 
   // 重复执行同一声明（后向 goto 回跳）时复用已有区间，按同一策略重置
   const existing = scope.vars.find((x) => x.name === v.name);
@@ -333,17 +336,17 @@ function declareArray(
     for (let k = 0; k < v.varType.length; k++) {
       const cell = i.cells.get(base0 + k);
       if (cell) cell.value = fill;
-      draft.changedAddresses.add(base0 + k);
+      draft?.changedAddresses.add(base0 + k);
     }
-    if (v.initList) {
+    if (hasInit) {
       let addr = base0;
-      for (const el of v.initList) {
+      for (const el of v.initList!) {
         const val = evalExpr(i, el);
         const cell = i.cells.get(addr);
         if (cell) {
           // 元素写入统一走 coercion（SEMANTIC_MODEL §3.2）
           cell.value = coerceRuntimeValue(val, v.varType.elem).value;
-          draft.changedAddresses.add(addr);
+          draft?.changedAddresses.add(addr);
         }
         addr++;
       }
@@ -355,22 +358,45 @@ function declareArray(
     const addr = i.allocCell(v.varType.elem);
     const cell = i.cells.get(addr);
     if (cell) cell.value = fill;
-    draft.changedAddresses.add(addr);
+    draft?.changedAddresses.add(addr);
   }
   scope.vars.push({ name: v.name, type: v.varType, address: base, length: v.varType.length });
-  draft.changedScopes.add(scope.id);
+  draft?.changedScopes.add(scope.id);
 
-  if (v.initList) {
+  if (hasInit) {
     let addr = base;
-    for (const el of v.initList) {
+    for (const el of v.initList!) {
       const val = evalExpr(i, el);
       // 元素写入统一走 coercion（SEMANTIC_MODEL §3.2）
       const cell = i.cells.get(addr);
       if (cell) {
         cell.value = coerceRuntimeValue(val, v.varType.elem).value;
-        draft.changedAddresses.add(addr);
+        draft?.changedAddresses.add(addr);
       }
       addr++;
+    }
+  }
+}
+
+/**
+ * 前向 goto 跳过的顶层声明：补创建变量并置为未初始化（对齐 C 块作用域，
+ * SEMANTIC_MODEL §2.4）。仅处理本序列顶层的声明（含 label 包裹）；被跳过的
+ * 嵌套块内部声明不创建——它们对外不可见（静态作用域已保证）。
+ */
+export function declareSkippedDecls(i: Interpreter, skipped: Stmt[]): void {
+  const scope = i.scopes[i.scopes.length - 1];
+  if (!scope) return;
+  for (const s of skipped) {
+    let d: VarDeclStmt | null = null;
+    if (s.kind === 'var-decl') d = s;
+    else if (s.kind === 'label' && s.stmt.kind === 'var-decl') d = s.stmt;
+    if (!d) continue;
+    for (const v of d.vars) {
+      if (isArray(v.varType)) {
+        declareArray(i, scope, null, v as ArrayDeclarator, true);
+      } else {
+        i.declareScalar(scope, v.name, v.varType, d);
+      }
     }
   }
 }

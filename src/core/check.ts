@@ -118,9 +118,41 @@ function checkFunction(
       errors.push(makeError('E_DECL', 'check', fn.body, `形参「${p.name}」重复声明`));
     }
   }
-  const ctx: Ctx = { fn, fnTable, env: globalEnv, errors, atGlobalScope: false, loopDepth: 0, switchDepth: 0 };
+  const ctx: Ctx = {
+    fn, fnTable, env: globalEnv, errors, atGlobalScope: false,
+    loopDepth: 0, switchDepth: 0,
+    seqStack: [], seqCounter: { next: 1 }, labelReachable: true,
+    labelChains: new Map(), gotoChains: [],
+  };
   for (const s of fn.body.body) checkStmt(s, ctx);
   globalEnv.popScope();
+
+  // goto 支持矩阵校验（SEMANTIC_MODEL §2.4）：
+  // 目标标签的序列链必须是 goto 所在链的前缀（允许跳出，拒绝跳入嵌套/兄弟块）
+  for (const g of ctx.gotoChains) {
+    const labelChain = ctx.labelChains.get(g.name);
+    if (labelChain === undefined) continue; // 标签不存在已由前置检查报错
+    if (labelChain === null) {
+      errors.push(makeError('E_LABEL', 'check', g.at,
+        `goto 目标标签「${g.name}」位于 if/循环单语句分支或 case 语句内，无法跳转到`,
+        '标签需要直接位于函数体或某个 { } 块的顶层'));
+      continue;
+    }
+    if (!isSeqPrefix(labelChain, g.chain)) {
+      errors.push(makeError('E_LABEL', 'check', g.at,
+        `goto 不能跳入嵌套块：标签「${g.name}」所在的作用域从 goto 位置无法进入`,
+        '仅支持跳到同一语句层或外层的标签；跳入未打开的 { } 块不支持'));
+    }
+  }
+}
+
+/** a 是否为 b 的前缀（含相等） */
+function isSeqPrefix(a: number[], b: number[]): boolean {
+  if (a.length > b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 function collectGotos(stmts: Stmt[], out: { name: string; at: { line: number; column: number } }[]): void {
@@ -171,6 +203,16 @@ interface Ctx {
   loopDepth: number;
   /** switch 嵌套深度（仅 break 合法性） */
   switchDepth: number;
+  /** 语句序列祖先链（goto 支持矩阵：块与函数体各占一层，与运行时 execBlockBody 对应） */
+  seqStack: number[];
+  /** 序列 id 计数器 */
+  seqCounter: { next: number };
+  /** 当前位置的标签是否可被 goto 命中（if/循环单语句分支与 case 体为 false） */
+  labelReachable: boolean;
+  /** 标签名 → 命中链（null = 位于不可跳转位置） */
+  labelChains: Map<string, number[] | null>;
+  /** goto 语句 → 其所在序列链（遍历后统一校验） */
+  gotoChains: { name: string; at: Stmt; chain: number[] }[];
 }
 
 function addError(ctx: Ctx, at: { line: number; column: number }, message: string, hint?: string): void {
@@ -216,11 +258,16 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
     case 'if': {
       checkCondition(s.condition, ctx);
       ctx.env.pushScope('block');
+      const savedReach = ctx.labelReachable;
+      ctx.labelReachable = false; // if 分支单语句不是可跳转序列（块会自行重置为 true）
       checkStmt(s.then, ctx);
+      ctx.labelReachable = savedReach;
       ctx.env.popScope();
       if (s.else) {
         ctx.env.pushScope('block');
+        ctx.labelReachable = false;
         checkStmt(s.else, ctx);
+        ctx.labelReachable = savedReach;
         ctx.env.popScope();
       }
       break;
@@ -228,16 +275,20 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
     case 'while':
       checkCondition(s.condition, ctx);
       ctx.env.pushScope('block');
+      ctx.labelReachable = false;
       ctx.loopDepth++;
       checkStmt(s.body, ctx);
       ctx.loopDepth--;
+      ctx.labelReachable = true;
       ctx.env.popScope();
       break;
     case 'do-while':
       ctx.env.pushScope('block');
+      ctx.labelReachable = false;
       ctx.loopDepth++;
       checkStmt(s.body, ctx);
       ctx.loopDepth--;
+      ctx.labelReachable = true;
       ctx.env.popScope();
       checkCondition(s.condition, ctx);
       break;
@@ -248,9 +299,11 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
       if (s.condition) checkCondition(s.condition, ctx);
       if (s.update) exprType(s.update, ctx);
       ctx.env.pushScope('block');
+      ctx.labelReachable = false;
       ctx.loopDepth++;
       checkStmt(s.body, ctx);
       ctx.loopDepth--;
+      ctx.labelReachable = true;
       ctx.env.popScope();
       ctx.env.popScope();
       break;
@@ -262,6 +315,7 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
       // switch 体整体是一个块作用域（C：case 标签不引入新作用域，各区段声明共享同一层）
       ctx.env.pushScope('switch');
       ctx.switchDepth++;
+      ctx.labelReachable = false; // case 体不是可跳转序列（其中的 { } 块自行重置为 true）
       for (const sec of s.cases) {
         for (const label of sec.labels) {
           if (label.value) {
@@ -275,6 +329,7 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
         }
         sec.body.forEach((st) => checkStmt(st, ctx));
       }
+      ctx.labelReachable = true;
       ctx.switchDepth--;
       ctx.env.popScope();
       break;
@@ -292,9 +347,14 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
       }
       break;
     case 'goto':
+      ctx.gotoChains.push({ name: s.label, at: s, chain: [...ctx.seqStack] });
+      break;
     case 'empty':
       break;
     case 'label':
+      if (!ctx.labelChains.has(s.name)) {
+        ctx.labelChains.set(s.name, ctx.labelReachable ? [...ctx.seqStack] : null);
+      }
       checkStmt(s.stmt, ctx);
       break;
     case 'return':
@@ -306,11 +366,20 @@ function checkStmt(s: Stmt, ctx: Ctx): void {
         }
       }
       break;
-    case 'block':
+    case 'block': {
       ctx.env.pushScope('block');
+      // 块体是一个新语句序列（与运行时 execBlockBody 一一对应）
+      const seqId = ctx.seqCounter.next++;
+      const savedSeq = ctx.seqStack;
+      const savedReach = ctx.labelReachable;
+      ctx.seqStack = [...savedSeq, seqId];
+      ctx.labelReachable = true;
       s.body.forEach((st) => checkStmt(st, ctx));
+      ctx.seqStack = savedSeq;
+      ctx.labelReachable = savedReach;
       ctx.env.popScope();
       break;
+    }
   }
 }
 

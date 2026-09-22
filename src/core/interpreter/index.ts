@@ -10,7 +10,7 @@ import type { RunErrorCode } from '../errors';
 import {
   descStepLimit, descTimeLimit, descRuntimeError, descProgramEnd,
 } from '../explain';
-import { execStmt } from './stmt';
+import { execStmt, declareSkippedDecls } from './stmt';
 import { valueToDisplay } from '../values';
 import { coerceRuntimeValue } from '../coercion';
 import type { CType } from '../types';
@@ -458,6 +458,8 @@ export class Interpreter {
    * 执行语句序列（不建块作用域；块作用域由 Block 语句自己管理）。
    * goto 信号在本层捕获：目标标签若在本序列中，直接从该标签继续执行
    * （被跳过的语句不执行、其块作用域不创建）；否则向外冒泡。
+   * 前向跳转跳过的顶层声明按 C 块作用域语义补创建为未初始化
+   * （SEMANTIC_MODEL §2.4）：块作用域覆盖整块，跳过初始化 = indeterminate。
    */
   execBlockBody(stmts: Stmt[]): void {
     let idx = 0;
@@ -469,6 +471,7 @@ export class Interpreter {
         if (e instanceof GotoSignal) {
           const targetIdx = stmts.findIndex((st) => st.kind === 'label' && st.name === e.label);
           if (targetIdx >= 0) {
+            if (targetIdx > idx) declareSkippedDecls(this, stmts.slice(idx + 1, targetIdx));
             idx = targetIdx;
             continue;
           }
