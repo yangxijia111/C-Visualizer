@@ -176,7 +176,7 @@ export function CallStackPanel({ snap, step }: { snap: Snapshot; step: Execution
           return (
             <div key={`${f.scopeId}-${idx}`} className={`frame-row${isTop ? ' top' : ''}`}>
               <span className="frame-name">{f.functionName}({params})</span>
-              {idx < frames.length - 1 && <span className="dim"> ← 调用自第 {frames[idx + 1] ? f.callLine : f.callLine} 行</span>}
+              {idx < frames.length - 1 && <span className="dim"> ← 调用自第 {f.callLine} 行</span>}
             </div>
           );
         })}
