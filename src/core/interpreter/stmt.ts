@@ -13,6 +13,7 @@ import {
   descLoopCheck, descForUpdate, descBreak, descContinue,
   descSwitchDisc, descCaseMatch, descFallThrough, descGoto,
 } from '../explain';
+import type { ArrayInitStatus } from '../explain';
 
 export function execStmt(i: Interpreter, s: Stmt): void {
   switch (s.kind) {
@@ -279,48 +280,59 @@ function execGoto(i: Interpreter, s: Extract<Stmt, { kind: 'goto' }>): void {
   throw new GotoSignal(s.label);
 }
 
-/** 变量声明（标量、指针、一维数组） */
+/** 变量声明（标量、指针、一维数组）；初始化行为由存储期决定（SEMANTIC_MODEL §5） */
 function execVarDecl(i: Interpreter, s: VarDeclStmt): void {
   const scope = i.scopes[i.scopes.length - 1];
   if (!scope) throw new RuntimeFailure('E_INTERNAL', '没有活动作用域', 1);
   const draft = i.beginStep(s, 'var-decl');
   const values: (RuntimeValue | null)[] = [];
+  const arrayStatus: ArrayInitStatus[] = [];
 
   for (const v of s.vars) {
     if (isArray(v.varType)) {
+      arrayStatus.push(v.initList ? 'list' : (i.currentStorage === 'static' ? 'zero' : 'uninit'));
       declareArray(i, scope, draft, v as ArrayDeclarator);
-      values.push({ type: (v.varType as { elem: 'int' | 'char' | 'float' | 'double' }).elem, value: 0 });
+      values.push(null); // 数组展示由 arrayStatus 决定
       continue;
     }
     const addr = i.declareScalar(scope, v.name, v.varType, s);
     if (v.init) {
       const val = evalExpr(i, v.init);
       values.push(i.writeCell(addr, val, v.init));
+    } else if (i.currentStorage === 'static') {
+      // 静态存储期：无初始化式 → 零初始化（int 0 / double 0.0 / char 0 / 指针 NULL）
+      values.push(i.writeCell(addr, { type: 'int', value: 0 }, s));
     } else {
       values.push(null);
     }
   }
 
-  i.finishStep(descVarDecl(s.vars, values));
+  i.finishStep(descVarDecl(s.vars, values, arrayStatus));
 }
 
 /** 数组声明符的收窄类型 */
 type ArrayDeclarator = VarDeclarator & { varType: { kind: 'array'; elem: 'int' | 'char' | 'float' | 'double'; length: number } };
 
-/** 一维数组：分配连续地址区间；声明即全 0（C 语义），初始化列表覆盖前缀 */
+/**
+ * 一维数组：分配连续地址区间。初始化策略（SEMANTIC_MODEL §5）：
+ * - 带初始化列表（含 {}）：前缀逐元素收敛写入，其余元素零初始化；
+ * - 无初始化列表：静态存储期（全局）全元素零；自动存储期（局部）全元素未初始化。
+ */
 function declareArray(
   i: Interpreter,
   scope: Scope,
   draft: StepDraft,
   v: ArrayDeclarator,
 ): void {
-  // 重复执行同一声明（后向 goto 回跳）时复用已有区间
+  const fill: number | null = v.initList || i.currentStorage === 'static' ? 0 : null;
+
+  // 重复执行同一声明（后向 goto 回跳）时复用已有区间，按同一策略重置
   const existing = scope.vars.find((x) => x.name === v.name);
   if (existing && existing.address !== null && existing.length === v.varType.length) {
     const base0 = existing.address;
     for (let k = 0; k < v.varType.length; k++) {
       const cell = i.cells.get(base0 + k);
-      if (cell) cell.value = 0;
+      if (cell) cell.value = fill;
       draft.changedAddresses.add(base0 + k);
     }
     if (v.initList) {
@@ -342,7 +354,7 @@ function declareArray(
   for (let k = 0; k < v.varType.length; k++) {
     const addr = i.allocCell(v.varType.elem);
     const cell = i.cells.get(addr);
-    if (cell) cell.value = 0;
+    if (cell) cell.value = fill;
     draft.changedAddresses.add(addr);
   }
   scope.vars.push({ name: v.name, type: v.varType, address: base, length: v.varType.length });

@@ -77,6 +77,11 @@ export class Interpreter {
   fnTable: Map<string, FunctionDef> = new Map();
   status: ExecutionStep['status'] = 'ok';
   /**
+   * 当前存储期（初始化策略，SEMANTIC_MODEL §5）：执行全局声明 = 'static'（零初始化）；
+   * 进入任意函数体（含 main）= 'auto'（无初始化式则保持未初始化）。
+   */
+  currentStorage: 'static' | 'auto' = 'static';
+  /**
    * 可中断构造栈（loop/switch，按进入顺序）：break 归属栈顶最近的构造，
    * continue 归属栈顶向下最近的循环（合法性由检查器保证，此处仅用于正确展示）。
    */
@@ -268,10 +273,12 @@ export class Interpreter {
     const initialSnapshot = this.captureSnapshot();
     try {
       this.pushScope('global', '全局');
-      // 全局变量声明（每条一个步骤）
+      // 全局变量声明（每条一个步骤）：静态存储期 → 无初始化式也零初始化
+      this.currentStorage = 'static';
       for (const g of this.program.globals) {
         execStmt(this, g);
       }
+      this.currentStorage = 'auto';
       // 进入 main
       const main = this.program.functions.find((f) => f.name === 'main');
       if (!main) {
@@ -324,6 +331,7 @@ export class Interpreter {
   execFunction(fn: FunctionDef): void {
     this.currentFn = fn;
     this.currentLabels = collectLabels(fn.body.body);
+    this.currentStorage = 'auto';
     this.pushScope('function', fn.name);
     // 形参在 Phase 5 处理
     this.execBlockBody(fn.body.body);
@@ -354,6 +362,7 @@ export class Interpreter {
     const savedLabels = this.currentLabels;
     this.currentLabels = collectLabels(fn.body.body);
     const scope = this.pushScope('function', fn.name);
+    this.currentStorage = 'auto'; // 函数内声明一律自动存储期
     // 实参在绑定到形参前统一收敛到形参类型（SEMANTIC_MODEL §3.4）；
     // 调用步骤的展示与事件也使用转换后的值
     const boundArgs = fn.params.map((p, idx) => coerceRuntimeValue(args[idx], p.type));

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { runSrc } from './helpers';
 
 describe('数组声明与初始化', () => {
-  it('声明即全 0', async () => {
+  it('局部无初始化数组保持未初始化（v1.1.0 行为修正）', async () => {
     const r = await runSrc(`
       int main() {
         int a[5];
@@ -13,7 +13,7 @@ describe('数组声明与初始化', () => {
     const snap = r.steps[r.steps.length - 1].snapshot;
     const arrVar = snap.scopes.flatMap((s) => s.vars).find((v) => v.name === 'a');
     expect(arrVar?.length).toBe(5);
-    // 元素可读且为 0（数组与未初始化标量不同：C 语义全零）
+    // 自动存储期：元素未初始化，读取报 E_UNINIT_READ（全局数组才是全 0，见 semantic/initialization）
     const r2 = await runSrc(`
       int main() {
         int a[5];
@@ -21,7 +21,7 @@ describe('数组声明与初始化', () => {
         return 0;
       }
     `);
-    expect(r2.finalVar('x')?.value).toBe(0);
+    expect(r2.errorCode()).toBe('E_UNINIT_READ');
   });
 
   it('初始化列表 {1,2,3}：剩余补 0', async () => {

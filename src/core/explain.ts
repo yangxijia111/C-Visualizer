@@ -5,15 +5,18 @@ import { valueToDisplay } from './values';
 import type { VarDeclarator } from './ast';
 import { isArray } from './types';
 
-/** 变量声明说明（支持多声明符） */
-export function descVarDecl(vars: VarDeclarator[], values: (RuntimeValue | null)[]): string {
+/** 数组声明的初始化状态：初始化列表 / 零初始化（静态存储期）/ 未初始化（自动存储期） */
+export type ArrayInitStatus = 'list' | 'zero' | 'uninit';
+
+/** 变量声明说明（支持多声明符；数组展示由初始化策略决定） */
+export function descVarDecl(vars: VarDeclarator[], values: (RuntimeValue | null)[], arrayStatus?: ArrayInitStatus[]): string {
+  const statusOf = (idx: number): ArrayInitStatus => arrayStatus?.[idx] ?? (vars[idx].initList ? 'list' : 'zero');
   const parts = vars.map((v, i) => {
     const val = values[i];
     if (isArray(v.varType)) {
-      const initialized = v.initList && v.initList.length > 0;
-      return initialized
-        ? `数组 ${v.name}[${v.varType.length}] 已初始化`
-        : `数组 ${v.name}[${v.varType.length}]（元素全为 0）`;
+      if (statusOf(i) === 'list') return `数组 ${v.name}[${v.varType.length}] 已初始化`;
+      if (statusOf(i) === 'zero') return `数组 ${v.name}[${v.varType.length}]（元素全为 0）`;
+      return `数组 ${v.name}[${v.varType.length}]（元素未初始化）`;
     }
     if (val === null) return `变量 ${v.name}（${v.varType}，未初始化）`;
     return `${v.name} = ${valueToDisplay(val)}`;
@@ -22,9 +25,10 @@ export function descVarDecl(vars: VarDeclarator[], values: (RuntimeValue | null)
     const v = vars[0];
     const val = values[0];
     if (isArray(v.varType)) {
-      return v.initList && v.initList.length > 0
-        ? `声明数组 ${v.name}[${v.varType.length}]，并初始化元素。`
-        : `声明数组 ${v.name}[${v.varType.length}]，所有元素初始化为 0。`;
+      const st = statusOf(0);
+      if (st === 'list') return `声明数组 ${v.name}[${v.varType.length}]，并初始化元素。`;
+      if (st === 'zero') return `声明数组 ${v.name}[${v.varType.length}]，所有元素初始化为 0（全局变量）。`;
+      return `声明数组 ${v.name}[${v.varType.length}]，元素未初始化（读取会报错）。`;
     }
     if (val === null) return `声明变量 ${v.name}（${v.varType}），暂未初始化。`;
     return `声明变量 ${v.name}（${v.varType}），并初始化为 ${valueToDisplay(val)}。`;
