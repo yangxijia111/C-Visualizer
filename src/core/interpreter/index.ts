@@ -124,7 +124,13 @@ export class Interpreter {
     private source: string,
     options?: RunOptions,
   ) {
-    this.opts = { ...DEFAULT_RUN_OPTIONS, ...options };
+    // 逐字段合并：显式 undefined 的选项回落默认值（直接展开会把保护上限覆盖成 undefined）
+    this.opts = { ...DEFAULT_RUN_OPTIONS };
+    if (options?.maxSteps !== undefined) this.opts.maxSteps = options.maxSteps;
+    if (options?.timeLimitMs !== undefined) this.opts.timeLimitMs = options.timeLimitMs;
+    if (options?.maxCallDepth !== undefined) this.opts.maxCallDepth = options.maxCallDepth;
+    this.opts.onStep = options?.onStep;
+    this.opts.shouldCancel = options?.shouldCancel;
     for (const f of program.functions) this.fnTable.set(f.name, f);
   }
 

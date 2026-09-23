@@ -69,6 +69,20 @@ int main() {
 });
 
 describe('shouldCancel 协作取消', () => {
+  it('显式 undefined 选项不覆盖默认保护（压测回归：step-limit 必须始终生效）', async () => {
+    const { Interpreter } = await import('../../src/core/interpreter');
+    const compiled = await compile(PROGRAM);
+    if (!compiled.ok) throw new Error('编译失败');
+    const interp = new Interpreter(compiled.program, PROGRAM, {
+      maxSteps: undefined,
+      timeLimitMs: undefined,
+      maxCallDepth: undefined,
+    });
+    expect(interp.opts.maxSteps).toBe(10000);
+    expect(interp.opts.timeLimitMs).toBe(10000);
+    expect(interp.opts.maxCallDepth).toBe(100);
+  });
+
   it('置位后追加 status=cancelled 终止步骤，RunResult.status=cancelled', async () => {
     const compiled = await compile(PROGRAM);
     if (!compiled.ok) throw new Error('编译失败');

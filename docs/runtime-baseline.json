@@ -1,9 +1,9 @@
 {
   "meta": {
-    "generatedAt": "2026-09-22T22:06:41.265Z",
+    "generatedAt": "2026-09-23T01:33:24.009Z",
     "node": "v24.19.0",
     "platform": "win32 x64",
-    "commit": "c8a505c",
+    "commit": "7399865",
     "phase": "baseline-v1.1-full-snapshot-main-thread",
     "notes": [
       "runMsMedian 即 v1.1 主线程阻塞时长代理（解释器同步运行在 UI 主线程）。",
@@ -20,18 +20,18 @@
       "cells": 2,
       "scopes": 2,
       "outputBytes": 0,
-      "compileMsMedian": 1.78,
-      "runMsMedian": 2.39,
+      "compileMsMedian": 0.71,
+      "runMsMedian": 1.85,
       "runMsAll": [
-        1.71,
-        2.39,
-        6.19,
-        22.25,
-        1.66
+        3.93,
+        1.73,
+        1.04,
+        2.09,
+        1.85
       ],
       "traceJsonBytesEstimated": 70416,
-      "heapUsedDeltaBytes": 179768,
-      "seek1000Ms": 0.59
+      "heapUsedDeltaBytes": 204472,
+      "seek1000Ms": 0.47
     },
     {
       "name": "medium-array-100cells",
@@ -40,18 +40,18 @@
       "cells": 102,
       "scopes": 2,
       "outputBytes": 0,
-      "compileMsMedian": 33.69,
-      "runMsMedian": 214.07,
+      "compileMsMedian": 1.75,
+      "runMsMedian": 44.19,
       "runMsAll": [
-        182.42,
-        210.16,
-        214.07,
-        223.26,
-        286.74
+        46.81,
+        44.89,
+        41.54,
+        39.27,
+        44.19
       ],
       "traceJsonBytesEstimated": 6181109,
-      "heapUsedDeltaBytes": 11882736,
-      "seek1000Ms": 0.43
+      "heapUsedDeltaBytes": 11879368,
+      "seek1000Ms": 0.33
     },
     {
       "name": "large-array-500cells-step-limit",
@@ -60,18 +60,18 @@
       "cells": 502,
       "scopes": 2,
       "outputBytes": 0,
-      "compileMsMedian": 2.51,
-      "runMsMedian": 3556.37,
+      "compileMsMedian": 0.63,
+      "runMsMedian": 1381.49,
       "runMsAll": [
-        4298.64,
-        4555.68,
-        3458.15,
-        3393.01,
-        3556.37
+        1433.2,
+        1437.95,
+        1381.49,
+        1254.72,
+        1299.66
       ],
       "traceJsonBytesEstimated": 170217087,
-      "heapUsedDeltaBytes": 302016264,
-      "seek1000Ms": 0.98
+      "heapUsedDeltaBytes": 300891832,
+      "seek1000Ms": 0.56
     },
     {
       "name": "recursion-fib12",
@@ -80,18 +80,18 @@
       "cells": 466,
       "scopes": 2,
       "outputBytes": 0,
-      "compileMsMedian": 1.15,
-      "runMsMedian": 377.68,
+      "compileMsMedian": 0.4,
+      "runMsMedian": 145.32,
       "runMsAll": [
-        430.9,
-        360.82,
-        363.46,
-        436.12,
-        377.68
+        154.42,
+        137.49,
+        133.21,
+        146.24,
+        145.32
       ],
       "traceJsonBytesEstimated": 16647172,
-      "heapUsedDeltaBytes": 31373952,
-      "seek1000Ms": 0.55
+      "heapUsedDeltaBytes": 31358912,
+      "seek1000Ms": 0.31
     },
     {
       "name": "goto-loop-200",
@@ -100,18 +100,18 @@
       "cells": 2,
       "scopes": 2,
       "outputBytes": 0,
-      "compileMsMedian": 1.2,
-      "runMsMedian": 37.33,
+      "compileMsMedian": 0.31,
+      "runMsMedian": 9.73,
       "runMsAll": [
-        37.56,
-        38.3,
-        34.38,
-        37.33,
-        27.85
+        12.65,
+        8.99,
+        10.32,
+        9.52,
+        9.73
       ],
       "traceJsonBytesEstimated": 657270,
-      "heapUsedDeltaBytes": 1582400,
-      "seek1000Ms": 0.2
+      "heapUsedDeltaBytes": 1575904,
+      "seek1000Ms": 0.05
     }
   ]
 }

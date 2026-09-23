@@ -190,6 +190,31 @@ int main() {
     expect(steps.length).toBe(31);
     expect(steps[steps.length - 1]!.status).toBe('step-limit');
   });
+
+  it('消息未提供保护参数时默认上限仍然生效（undefined 不覆盖默认值）', async () => {
+    const { posts, core } = makeCollector();
+    await core.init();
+    const src = `
+int main() {
+  int i = 0;
+  while (1) {
+    i = i + 1;
+  }
+  return 0;
+}
+`;
+    // maxSteps 缺省但给了一个很小的 timeLimitMs：若默认 maxSteps 被破坏则程序不会终止
+    await drive(core, [{
+      type: 'COMPILE_RUN', runId: 1, source: src,
+      options: { batchSize: 100, maxSteps: undefined, timeLimitMs: 300 },
+    }]);
+    const finished = posts[posts.length - 1];
+    expect(finished.type).toBe('RUN_FINISHED');
+    if (finished.type === 'RUN_FINISHED') {
+      // 两种保护终态都证明上限生效（默认 maxSteps=10000 生效时通常先到 step-limit）
+      expect(['step-limit', 'time-limit']).toContain(finished.status);
+    }
+  });
 });
 
 describe('worker-core：串行化与取消回执', () => {

@@ -1,0 +1,75 @@
+{
+  "meta": {
+    "generatedAt": "2026-09-23T01:33:23.819Z",
+    "node": "v24.19.0",
+    "platform": "win32 x64",
+    "commit": "7399865",
+    "phase": "v1.2-checkpoint-delta-worker",
+    "checkpointInterval": 100,
+    "batchSize": 100,
+    "notes": [
+      "storeHeapMB = TraceStore(锚点+delta+缓存) 的强制 gc 保留堆；fullHeapMB = v1.1 全量快照 trace 同方法保留堆。",
+      "reductionPercent = 1 − storeHeap/fullHeap。",
+      "entryJsonKB = 批次条目（锚点快照+delta+元数据）的精确 JSON 体积，等于 Worker→主线程的传输体积；fullJsonKB 与 baseline 的 traceJsonBytesEstimated 同口径。",
+      "buildMs = 解释器执行 + diff 装配 + 入 store 的中位耗时（3 次），可与 baseline runMs 对比生成开销。",
+      "seek1kMs = 经 store 重建的 1000 次随机跳转（baseline 的 seek 为数组直读）。"
+    ]
+  },
+  "results": [
+    {
+      "name": "small-sum-100steps",
+      "steps": 95,
+      "storeHeapMB": 0.9,
+      "entryJsonKB": 42,
+      "fullHeapMB": -0.1,
+      "fullJsonKB": 69,
+      "reductionPercent": 0,
+      "buildMs": 4.07,
+      "seek1kMs": 9.89
+    },
+    {
+      "name": "medium-array-100cells",
+      "steps": 1562,
+      "storeHeapMB": 2.9,
+      "entryJsonKB": 769,
+      "fullHeapMB": 11.5,
+      "fullJsonKB": 6036,
+      "reductionPercent": 75,
+      "buildMs": 111.9,
+      "seek1kMs": 26.63
+    },
+    {
+      "name": "recursion-fib12",
+      "steps": 1863,
+      "storeHeapMB": 3.2,
+      "entryJsonKB": 933,
+      "fullHeapMB": 30,
+      "fullJsonKB": 16257,
+      "reductionPercent": 89.4,
+      "buildMs": 255.21,
+      "seek1kMs": 30.97
+    },
+    {
+      "name": "goto-loop-200",
+      "steps": 1003,
+      "storeHeapMB": 1.5,
+      "entryJsonKB": 370,
+      "fullHeapMB": 1.5,
+      "fullJsonKB": 642,
+      "reductionPercent": 1.5,
+      "buildMs": 13.02,
+      "seek1kMs": 7.27
+    },
+    {
+      "name": "large-array-500cells-step-limit",
+      "steps": 10001,
+      "storeHeapMB": 17.9,
+      "entryJsonKB": 5700,
+      "fullHeapMB": 288.3,
+      "fullJsonKB": 166228,
+      "reductionPercent": 93.8,
+      "buildMs": 2558.93,
+      "seek1kMs": 60.96
+    }
+  ]
+}

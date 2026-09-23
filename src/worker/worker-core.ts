@@ -100,13 +100,14 @@ export function createWorkerCore(deps: WorkerCoreDeps): WorkerCore {
       // RUN_STARTED 必须先于任何批次（initialSnapshot 是重建链的锚点 -1）
       post({ type: 'RUN_STARTED', runId, initialSnapshot: emptyInitialSnapshot() });
 
-      const result = runProgram(compiled.program, source, {
-        maxSteps: options?.maxSteps,
-        timeLimitMs: options?.timeLimitMs,
-        maxCallDepth: options?.maxCallDepth,
-        onStep: (step, prevState) => assembler.feed(step, prevState),
-        shouldCancel: () => cancelRequested,
-      });
+      // 只传显式提供的选项（避免 undefined 覆盖解释器默认保护）
+      const runOpts: Parameters<typeof runProgram>[2] = {};
+      if (options?.maxSteps !== undefined) runOpts.maxSteps = options.maxSteps;
+      if (options?.timeLimitMs !== undefined) runOpts.timeLimitMs = options.timeLimitMs;
+      if (options?.maxCallDepth !== undefined) runOpts.maxCallDepth = options.maxCallDepth;
+      runOpts.onStep = (step, prevState) => assembler.feed(step, prevState);
+      runOpts.shouldCancel = () => cancelRequested;
+      const result = runProgram(compiled.program, source, runOpts);
       assembler.finish();
       activeRunId = null;
       // 结果中的 steps 留给 GC；trace 已经流式送达主线程
