@@ -219,8 +219,8 @@ function flowText(f: FlowEvent): { text: string; cls: string } {
   }
 }
 
-export function ControlFlowPanel({ steps, currentStep }: { steps: ExecutionStep[]; currentStep: number }) {
-  const { past, now } = splitFlowEvents(steps, currentStep);
+export function ControlFlowPanel({ records, currentStep }: { records: readonly { flowEvents: FlowEvent[] }[]; currentStep: number }) {
+  const { past, now } = splitFlowEvents(records, currentStep);
 
   return (
     <div className="panel" role="region" aria-label="控制流">
