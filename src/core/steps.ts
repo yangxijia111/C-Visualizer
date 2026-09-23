@@ -46,7 +46,7 @@ export interface ExecutionStep {
   flowEvents: FlowEvent[];
   /** 中文教学说明（确定性生成） */
   description: string;
-  status: 'ok' | 'runtime-error' | 'program-end' | 'step-limit' | 'time-limit';
+  status: 'ok' | 'runtime-error' | 'program-end' | 'step-limit' | 'time-limit' | 'cancelled';
   errorCode?: RunErrorCode;
   /** 本步新增的 printf 输出 */
   outputDelta?: string;
@@ -57,7 +57,13 @@ export interface RunResult {
   /** 第 0 步之前的状态（全局初始化前） */
   initialSnapshot: Snapshot;
   steps: ExecutionStep[];
-  /** 汇总状态：completed = 正常结束 */
-  status: 'completed' | 'runtime-error' | 'step-limit' | 'time-limit' | 'empty';
+  /** 汇总状态：completed = 正常结束；cancelled = 用户主动取消（v1.2） */
+  status: 'completed' | 'runtime-error' | 'step-limit' | 'time-limit' | 'cancelled' | 'empty';
   output: string;
 }
+
+/** 运行终态（协议层复用） */
+export type RunStatus = RunResult['status'];
+
+/** 执行步骤的元数据部分（快照由 TraceStore 单独管理，见 TRACE_STORE.md） */
+export type StepRecord = Omit<ExecutionStep, 'snapshot'>;

@@ -193,6 +193,27 @@ describe('Pages base 构建产物', () => {
     expect(js).toContain(`${PAGES_BASE}assets/web-tree-sitter`);
   }, 180000);
 
+  it('v1.2 worker 产物：worker chunk 独立打包，主入口不再包含 tree-sitter', () => {
+    const html = viteBuild('pages', outPages);
+    const assets = readdirSync(path.join(outPages, 'assets'));
+    // worker chunk（解释器 + 解析器宿主）存在且被主入口以 base 路径引用
+    expect(assets.some((f) => f.startsWith('runtime.worker') && f.endsWith('.js'))).toBe(true);
+    const workerJs = assets
+      .filter((f) => f.startsWith('runtime.worker') && f.endsWith('.js'))
+      .map((f) => readFileSync(path.join(outPages, 'assets', f), 'utf8'))
+      .join('\n');
+    expect(workerJs).toContain(`${PAGES_BASE}assets/tree-sitter-c`);
+    // bundle 拆分：主入口不得再引入 tree-sitter 的 wasm 资源引用（P13 §14）；
+    // 说明文字里的「tree-sitter」字样不算引用
+    const entry = assets
+      .filter((f) => /^index-.*\.js$/.test(f))
+      .map((f) => readFileSync(path.join(outPages, 'assets', f), 'utf8'))
+      .join('\n');
+    expect(entry).not.toContain('tree-sitter-c.wasm');
+    expect(entry).not.toContain('web-tree-sitter.wasm');
+    expect(html).toContain('src=');
+  }, 180000);
+
   it('默认构建：保持根路径 base（本地 preview / 静态部署不受影响）', () => {
     const html = viteBuild('production', outDefault);
     expect(html).toContain('src="/assets/');

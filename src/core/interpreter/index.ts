@@ -8,7 +8,7 @@ import { isPointer, isArray } from '../types';
 import type { ExecutionStep, RunResult, EvalItem, FlowEvent } from '../steps';
 import type { RunErrorCode } from '../errors';
 import {
-  descStepLimit, descTimeLimit, descRuntimeError, descProgramEnd,
+  descStepLimit, descTimeLimit, descRuntimeError, descProgramEnd, descCancelled,
 } from '../explain';
 import { execStmt, declareSkippedDecls } from './stmt';
 import { valueToDisplay } from '../values';
@@ -26,6 +26,13 @@ export class RuntimeFailure extends Error {
 export class HaltSignal extends Error {
   constructor(public haltStatus: 'step-limit' | 'time-limit') {
     super(haltStatus);
+  }
+}
+
+/** 用户取消信号（v1.2）：应取消当前执行并追加 cancelled 终止步骤 */
+export class CancelSignal extends Error {
+  constructor() {
+    super('cancelled');
   }
 }
 
@@ -48,13 +55,34 @@ export interface RunOptions {
   timeLimitMs?: number;
   /** 调用深度上限（默认 100） */
   maxCallDepth?: number;
+  /**
+   * 每步生成后的观测回调（v1.2：Worker 流式传输用）。
+   * 纯观测：解释器不读取其副作用，不影响执行与确定性。
+   * prevState = 上一步之后的快照；第 0 步传 initialSnapshot。
+   */
+  onStep?: (step: ExecutionStep, prevState: Snapshot | null) => void;
+  /**
+   * 协作式取消检查点（v1.2）：每个 ok 步后调用，返回 true 即取消。
+   * 注意：同步执行期间无法接收外部消息，Web Worker 场景由主线程
+   * terminate 硬取消（见 P13 §7.2）；本检查点服务于进程内嵌入与测试。
+   */
+  shouldCancel?: () => boolean;
 }
 
-export const DEFAULT_RUN_OPTIONS: Required<RunOptions> = {
+export const DEFAULT_RUN_OPTIONS: Required<Omit<RunOptions, 'onStep' | 'shouldCancel'>> = {
   maxSteps: 10000,
   timeLimitMs: 10000,
   maxCallDepth: 100,
 };
+
+/**
+ * 恒定空初始快照：Interpreter.run() 开始时（任何作用域/内存分配之前）capture
+ * 的结果与之逐字段相同；Worker 协议 RUN_STARTED 需要在执行前提供该快照，
+ * 抽成共享工厂避免两处硬编码漂移（P13 §7.2）。
+ */
+export function emptyInitialSnapshot(): Snapshot {
+  return { scopes: [], cells: {}, callStack: [], nextAddress: 1, output: '' };
+}
 
 export class Interpreter {
   /** 活动作用域栈（索引 0 = 全局） */
@@ -87,7 +115,9 @@ export class Interpreter {
    */
   breakableStack: { kind: 'loop' | 'switch'; loopType?: 'while' | 'do-while' | 'for' }[] = [];
   private startTime = 0;
-  readonly opts: Required<RunOptions>;
+  /** 上一步之后的快照（onStep 的 prevState 用；run() 开始后指向 initialSnapshot） */
+  private lastSnapshot: Snapshot | null = null;
+  readonly opts: Required<Omit<RunOptions, 'onStep' | 'shouldCancel'>> & Pick<RunOptions, 'onStep' | 'shouldCancel'>;
 
   constructor(
     private program: Program,
@@ -245,8 +275,15 @@ export class Interpreter {
     };
     this.steps.push(step);
 
+    // 观测回调（含终止步骤；在保护检查前，保证终态步骤也流入 trace 传输层）
+    if (this.opts.onStep) this.opts.onStep(step, this.lastSnapshot);
+    this.lastSnapshot = step.snapshot;
+
     // 保护检查
     if (step.status === 'ok') {
+      if (this.opts.shouldCancel?.() === true) {
+        throw new CancelSignal();
+      }
       if (this.steps.length >= this.opts.maxSteps) {
         throw new HaltSignal('step-limit');
       }
@@ -270,7 +307,9 @@ export class Interpreter {
 
   run(): RunResult {
     this.startTime = Date.now();
-    const initialSnapshot = this.captureSnapshot();
+    // 此刻尚无任何作用域/单元，快照恒等于空初始快照（见 emptyInitialSnapshot 注释）
+    const initialSnapshot = emptyInitialSnapshot();
+    this.lastSnapshot = initialSnapshot;
     try {
       this.pushScope('global', '全局');
       // 全局变量声明（每条一个步骤）：静态存储期 → 无初始化式也零初始化
@@ -293,6 +332,8 @@ export class Interpreter {
         this.finishStep(descProgramEnd(e.value ?? intValue0()), { status: 'program-end' });
       } else if (e instanceof HaltSignal) {
         this.finishHalt(e.haltStatus);
+      } else if (e instanceof CancelSignal) {
+        this.finishCancelled();
       } else if (e instanceof RuntimeFailure) {
         this.finishRuntimeError(e);
       } else {
@@ -318,6 +359,7 @@ export class Interpreter {
       case 'runtime-error': return 'runtime-error';
       case 'step-limit': return 'step-limit';
       case 'time-limit': return 'time-limit';
+      case 'cancelled': return 'cancelled';
       default: return 'completed';
     }
   }
@@ -402,6 +444,9 @@ export class Interpreter {
         throw new RuntimeFailure('E_INTERNAL', 'goto 目标标签解析失败（检查器应已拦截）', callLine);
       } else if (e instanceof HaltSignal) {
         // 步数/时间上限：保持现场直接冒泡（终止步骤需保留当前帧状态）
+        throw e;
+      } else if (e instanceof CancelSignal) {
+        // 用户取消：同 halt，保持现场直接冒泡
         throw e;
       } else {
         // 运行错误：弹帧后抛出（错误步骤呈现调用者视角的冻结现场）
@@ -490,6 +535,15 @@ export class Interpreter {
       halt === 'step-limit' ? descStepLimit(this.opts.maxSteps) : descTimeLimit(),
       { status: halt },
     );
+  }
+
+  /** 用户取消（v1.2）：与 halt 同构的终止步骤；与 step-limit 教学保护严格区分 */
+  private finishCancelled(): void {
+    this.drafts.length = 0;
+    const lastLine = this.steps.length > 0 ? this.steps[this.steps.length - 1].line : 1;
+    const node: NodeBase = { line: lastLine, endLine: lastLine, column: 1, endColumn: 1, text: '' };
+    this.beginStep(node, 'cancelled');
+    this.finishStep(descCancelled(), { status: 'cancelled' });
   }
 
   private finishRuntimeError(f: RuntimeFailure): void {

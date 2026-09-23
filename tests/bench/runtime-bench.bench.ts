@@ -182,24 +182,21 @@ async function benchProgram(p: ProgramBench): Promise<Record<string, unknown>> {
 
   // 计时：5 次运行取中位数（结果不保留，供下一轮覆盖）
   const runRuns: number[] = [];
-  let result: RunResult | null = null;
   for (let k = 0; k < 5; k++) {
     const t0 = performance.now();
-    result = runProgram(warm.program, p.source);
+    runProgram(warm.program, p.source);
     runRuns.push(performance.now() - t0);
   }
 
   // 内存：单独一次运行，强制 gc 前后取 heapUsed 差（= 单份 Trace 持有内存代理）。
   // 先释放计时轮的引用再取基线，否则新旧 trace 大小相抵、差值趋零
-  result = null;
   gc();
   const heapBefore = process.memoryUsage().heapUsed;
-  result = runProgram(warm.program, p.source);
+  const r: RunResult = runProgram(warm.program, p.source);
   gc();
   const heapAfter = process.memoryUsage().heapUsed;
   if (!globalThis.gc) throw new Error('global.gc 不可用：execArgv 未生效，heap 指标无效');
 
-  const r = result as RunResult;
   const lastSnap = r.steps[r.steps.length - 1]?.snapshot;
   const bytes = estimateTraceBytes(r);
   return {

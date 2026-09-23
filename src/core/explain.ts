@@ -96,6 +96,11 @@ export function descTimeLimit(): string {
   return '执行时间过长，已自动停止（可能存在无限循环或超大计算量）。';
 }
 
+/** 用户取消（v1.2） */
+export function descCancelled(): string {
+  return '已停止执行（用户取消）。已生成的步骤仍可查看。';
+}
+
 
 // ============ 控制流（Phase 4） ============
 

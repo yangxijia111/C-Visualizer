@@ -1,15 +1,19 @@
 // 主应用：布局 + 播放器状态机（Run/Pause/Next/Previous/Restart/跳转）
+// v1.2：compile + 解释执行移入 Web Worker（RuntimeClient），主线程只做播放与渲染
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CodeEditor from './ui/CodeEditor';
 import { VariablesPanel, MemoryPanel, CallStackPanel, ControlFlowPanel, OutputPanel } from './ui/Panels';
 import { EXAMPLES } from './examples';
-import { compile, runProgram } from './core/run';
 import type { CompileError } from './core/errors';
 import type { RunResult, ExecutionStep } from './core/steps';
 import type { Snapshot } from './core/values';
-import { getParser } from './core/cst';
+import { RuntimeClient } from './worker/client';
+import { entryToStep } from './worker/trace-assembler';
+import type { TraceEntry } from './worker/protocol';
 import { PLAYBACK_SPEEDS, nextStep, prevStep, advancePlaying, playButtonAction, timelineValue } from './ui/playback';
 import { nextDirtyState, shouldDisablePlayback, shouldDisableRun, visibleCurrentLine, isStaleResult } from './ui/run-state';
+
+const EMPTY_SNAPSHOT: Snapshot = { scopes: [], cells: {}, callStack: [], nextAddress: 1, output: '' };
 
 export default function App() {
   const [source, setSource] = useState(EXAMPLES[4].code); // 默认：if 判断（完成标准样例）
@@ -20,28 +24,42 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const [sourceDirty, setSourceDirty] = useState(false); // 源码相对上一次成功运行已被修改（旧结果 = 上一次运行）
   const [speed, setSpeed] = useState(2);
-  const [busy, setBusy] = useState(true); // wasm 加载中
-  const [parserError, setParserError] = useState<string | null>(null); // wasm 加载/解析器异常提示
-  const runSeq = useRef(0);
+  const [busy, setBusy] = useState(true); // Worker/解析器预热中
+  const [running, setRunning] = useState(false); // 正在执行（Worker 侧）
+  const [progress, setProgress] = useState(0); // 已流式接收的步数（运行中显示）
+  const [parserError, setParserError] = useState<string | null>(null); // Worker/解析器异常提示（致命，禁用运行）
+  const [runError, setRunError] = useState<string | null>(null); // 单次运行的意外失败（非致命，可重试）
+  // 运行竞态守卫：只有最新一次 client.run 的回调允许落地（旧 run 的终态一律忽略）
+  const runIdRef = useRef(-1);
+  // 流式装配缓冲：RUN_STARTED 的锚点 + 各批次步骤（RUN_FINISHED 时组装成 RunResult）
+  const initialSnapRef = useRef<Snapshot | null>(null);
+  const stepsBufRef = useRef<ExecutionStep[]>([]);
+  const clientRef = useRef<RuntimeClient | null>(null);
+  const getClient = useCallback((): RuntimeClient => {
+    if (!clientRef.current) clientRef.current = new RuntimeClient();
+    return clientRef.current;
+  }, []);
 
-  // 预热 wasm 解析器
+  // 预热 Worker（wasm 解析器在 Worker 内初始化）
   useEffect(() => {
-    getParser()
+    getClient()
+      .ensureReady()
       .then(() => setBusy(false))
-      .catch((e) => {
-        console.error('wasm 加载失败', e);
+      .catch((e: unknown) => {
+        console.error('worker 初始化失败', e);
         setParserError('解析器（tree-sitter wasm）加载失败：请检查网络连接后刷新页面重试。');
         setBusy(false);
       });
-  }, []);
+  }, [getClient]);
 
   const steps: ExecutionStep[] = runResult?.steps ?? [];
   const total = steps.length;
   const snapshot: Snapshot = runResult
     ? (currentStep < 0 ? runResult.initialSnapshot : steps[currentStep].snapshot)
-    : { scopes: [], cells: {}, callStack: [], nextAddress: 1, output: '' };
+    : EMPTY_SNAPSHOT;
   const cur = currentStep >= 0 && currentStep < total ? steps[currentStep] : null;
-  const playbackLocked = shouldDisablePlayback({ busy, parserError, sourceDirty, total });
+  const busyOrRunning = busy || running;
+  const playbackLocked = shouldDisablePlayback({ busy: busyOrRunning, parserError, sourceDirty, total });
 
   const errorLines = useMemo(() => {
     const m = new Map<number, string>();
@@ -87,29 +105,57 @@ export default function App() {
     return () => clearInterval(timer);
   }, [playing, speed, total]);
 
-  const handleRun = useCallback(async () => {
+  const handleRun = useCallback(() => {
     if (parserError) return; // 解析器不可用时禁止运行
     setPlaying(false);
-    setBusy(true);
     setCompileErrors(null);
-    try {
-      const compiled = await compile(source);
-      if (!compiled.ok) {
+    setRunError(null);
+    setRunning(true);
+    setProgress(0);
+    initialSnapRef.current = null;
+    stepsBufRef.current = [];
+    const appendBatch = (entries: TraceEntry[]): ExecutionStep[] => entries.map(entryToStep);
+    const rid = getClient().run(source, undefined, {
+      onStarted: (snap) => {
+        if (runIdRef.current !== rid) return; // 已被更新的 run 取代
+        initialSnapRef.current = snap;
+      },
+      onBatch: (_startIndex, entries) => {
+        if (runIdRef.current !== rid) return;
+        stepsBufRef.current.push(...appendBatch(entries));
+        setProgress(stepsBufRef.current.length);
+      },
+      onFinished: (status, output, _totalSteps) => {
+        if (runIdRef.current !== rid) return;
+        setRunResult({
+          source,
+          initialSnapshot: initialSnapRef.current ?? EMPTY_SNAPSHOT,
+          steps: stepsBufRef.current,
+          status,
+          output,
+        });
+        setCurrentStep(0);
+        setSourceDirty((d) => nextDirtyState(d, { type: 'run-success' }));
+        setRunning(false);
+      },
+      onCompileError: (errors) => {
+        if (runIdRef.current !== rid) return;
         // 编译失败：旧 runResult 保留但继续标记为旧结果（sourceDirty 不变 → 播放控制保持禁用）
-        setCompileErrors(compiled.errors);
-        return;
-      }
-      const seq = ++runSeq.current;
-      await Promise.resolve();
-      if (seq !== runSeq.current) return;
-      const result = runProgram(compiled.program, source);
-      setRunResult(result);
-      setCurrentStep(0);
-      setSourceDirty((d) => nextDirtyState(d, { type: 'run-success' }));
-    } finally {
-      setBusy(false);
-    }
-  }, [source, parserError]);
+        setCompileErrors(errors);
+        setRunning(false);
+      },
+      onRunError: (message) => {
+        if (runIdRef.current !== rid) return;
+        setRunError(message); // 非致命：显示错误但运行按钮保持可用（可重试）
+        setRunning(false);
+      },
+      onFatalError: (message) => {
+        setParserError(message);
+        setRunning(false);
+      },
+    });
+    runIdRef.current = rid;
+  }, [source, parserError, getClient]);
 
   // 编辑器输入：源码一旦变化，旧 runResult 即为「上一次运行」的结果，停止播放
   const handleSourceChange = useCallback((v: string) => {
@@ -124,9 +170,14 @@ export default function App() {
     setExampleId(id);
     setSource(ex.code);
     setCompileErrors(null);
+    setRunError(null);
     setRunResult(null);
     setCurrentStep(-1);
     setPlaying(false);
+    // 使在跑的旧 run 全部回调失效（其终态不得落入新示例的上下文）
+    runIdRef.current = -1;
+    setRunning(false);
+    setProgress(0);
     setSourceDirty((d) => nextDirtyState(d, { type: 'load-example' }));
   }, []);
 
@@ -148,8 +199,8 @@ export default function App() {
           ))}
         </select>
         <div className="controls">
-          <button className="primary" onClick={handleRun} disabled={shouldDisableRun(busy, parserError)} title="编译并运行">
-            {busy ? '加载中…' : '▶ 运行'}
+          <button className="primary" onClick={handleRun} disabled={shouldDisableRun(busyOrRunning, parserError)} title="编译并运行">
+            {running ? '运行中…' : busy ? '加载中…' : '▶ 运行'}
           </button>
           <button onClick={() => { setPlaying(false); setCurrentStep((s) => prevStep(s)); }} disabled={playbackLocked || !canPrev} title="上一步">
             ◀ 上一步
@@ -175,7 +226,11 @@ export default function App() {
         <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} title="播放速度" aria-label="播放速度（步/秒）">
           {PLAYBACK_SPEEDS.map((s) => <option key={s} value={s}>{s} 步/秒</option>)}
         </select>
-        <div className="step-indicator">{currentStep >= 0 ? `第 ${currentStep + 1} / ${total} 步` : `共 ${total} 步`}</div>
+        <div className="step-indicator">
+          {running
+            ? `正在执行… 已生成 ${progress} 步`
+            : currentStep >= 0 ? `第 ${currentStep + 1} / ${total} 步` : `共 ${total} 步`}
+        </div>
       </header>
 
       {/* 错误横幅 */}
@@ -194,12 +249,17 @@ export default function App() {
           ))}
         </div>
       )}
+      {runError && (
+        <div className="error-banner" role="alert">
+          {runError}
+        </div>
+      )}
 
       {/* 旧结果提示横幅：源码已修改，右侧可视化仍为上一次运行的数据 */}
       {staleResult && (
         <div className="stale-result-banner" role="status">
           <span>⚠ 源码已修改，当前可视化结果来自上一次运行，请重新运行。</span>
-          <button className="rerun-btn" onClick={handleRun} disabled={shouldDisableRun(busy, parserError)} title="用当前源码重新编译并运行">
+          <button className="rerun-btn" onClick={handleRun} disabled={shouldDisableRun(busyOrRunning, parserError)} title="用当前源码重新编译并运行">
             重新运行
           </button>
         </div>
