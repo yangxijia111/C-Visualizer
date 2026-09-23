@@ -24,7 +24,8 @@
 
 ## 核心特性
 
-- **逐步执行**：Run / Pause / Next / Previous / Restart / 时间轴任意跳转；回退基于每步完整快照，绝对精确
+- **逐步执行**：Run / Pause / Next / Previous / Restart / 时间轴任意跳转；跳转与回退基于确定性快照重建，绝对精确
+- **不冻结 UI**：解释执行运行在 Web Worker 中，大程序运行时界面保持响应，实时显示「已生成 N 步」，随时可「■ 停止」
 - **中文教学说明**：每一步自动生成简短说明（确定性规则，无 AI 依赖）
 - **表达式求值轨迹**：子表达式按求值顺序展示「源码 → 值」，短路未执行的右侧明确标注「未执行」
 - **可视化面板**：变量监视器（按作用域分组、变化高亮）、内存/数组格子、指针指向、调用栈、控制流轨迹、printf 输出
@@ -72,21 +73,28 @@ npm run preview    # 本地预览构建产物
 ## 项目架构
 
 ```
-源代码 → tree-sitter-c 解析（wasm）→ CST
+源代码 → tree-sitter-c 解析（wasm，Web Worker 内）→ CST
       → 教学 AST（自研转换，保留行列位置）
       → 语义检查（类型 / 标签 / printf 格式）
-      → 解释器（同步执行，三重保护：10000 步 / 100 层深度 / 10 秒墙钟）
-      → ExecutionStep[]（每步完整快照 + 求值轨迹 + 控制流事件 + 中文说明）
-      → React 播放器（时间轴任意跳转 O(1)，绝不重新推演）
+      → 解释器（Worker 内同步执行，三重保护：10000 步 / 100 层深度 / 10 秒墙钟）
+      → 流式批量步骤（STEP_BATCH，默认 100 步/批，runId 防竞态，支持随时取消）
+      → TraceStore（Checkpoint 每 100 步 + 逐步 Delta；任意步快照确定性重建）
+      → React 播放器（时间轴任意跳转，绝不重新推演执行）
 ```
+
+主线程不被解释执行阻塞（大程序运行全程界面可点击）；trace 内存较全量快照方案
+实测下降约 94%（10000 步 × 500 内存单元，见 docs/runtime-v1.2-benchmark.json）。
 
 ## 测试
 
 测试覆盖解析、转换、语义检查、解释器（表达式/循环/switch/goto/函数/递归/数组/指针）、
-保护边界、示例库集成，以及发布回归（控制流事件分离 / 播放边界 / Pages 构建产物 / 文档一致性 / 公共导出）：
+保护边界、示例库集成、运行时架构（Worker 协议 / 竞态 / 取消 / TraceStore /
+金标等价 / 随机 seek / 泄漏），以及发布回归（Pages 构建产物 / worker chunk /
+bundle 拆分 / 文档一致性 / 公共导出）：
 
 ```bash
-npm test
+npm test           # 全量测试（vitest，539+ 项）
+npm run bench      # 运行时基准（生成/对比 docs/runtime-*.json）
 ```
 
 CI（GitHub Actions）在每次 push 与全部 PR 上运行 lint + typecheck + test + build（Node 22 / 24 矩阵）。
@@ -99,16 +107,18 @@ React 19 · TypeScript（strict）· Vite · vitest · ESLint · CodeMirror 6 ·
 
 ```
 ├── src/
-│   ├── App.tsx            # 布局 + 播放器状态机
-│   ├── main.tsx           # 入口（安装浏览器 wasm 加载器）
+│   ├── App.tsx            # 布局 + 播放器状态机（双 TraceStore：building/display）
+│   ├── main.tsx           # 入口（wasm 加载在 Worker 内进行）
 │   ├── site-config.ts     # Pages 子路径常量
 │   ├── styles.css         # 全部样式（含窄窗口断点）
 │   ├── core/              # 与 UI 无关的核心：cst / convert / check / interpreter / run / steps / explain
+│   │   └── trace/         # TraceStore + Delta（checkpoint 增量存储与确定性重建）
+│   ├── worker/            # runtime.worker / worker-core / client / protocol / trace-assembler
 │   ├── examples/          # 内置示例库（21 个示例）
 │   └── ui/                # CodeEditor / Panels / flow-history / playback（纯逻辑可单测）
-├── tests/                 # vitest 测试（含 tests/release.test.ts 发布回归）
+├── tests/                 # vitest 测试（含 worker/ trace/ 套件与 tests/release.test.ts 发布回归）
 ├── docs/                  # 设计文档 + 开发阶段报告 + assets/
-├── scripts/               # parser 可行性 spike
+├── scripts/               # 浏览器冒烟与压测（headless Chrome + CDP）
 └── .github/workflows/     # ci.yml + deploy-pages.yml
 ```
 
@@ -121,7 +131,9 @@ React 19 · TypeScript（strict）· Vite · vitest · ESLint · CodeMirror 6 ·
 | [docs/SUPPORTED_C.md](docs/SUPPORTED_C.md) | **支持的 C 子集权威清单** |
 | [docs/PARSER_DESIGN.md](docs/PARSER_DESIGN.md) | 解析器选型（tree-sitter-c）与转换管线 |
 | [docs/AST_SPEC.md](docs/AST_SPEC.md) | 教学 AST 节点定义 |
-| [docs/EXECUTION_ENGINE.md](docs/EXECUTION_ENGINE.md) | 解释器/快照/步骤模型 |
+| [docs/EXECUTION_ENGINE.md](docs/EXECUTION_ENGINE.md) | 解释器/快照/步骤模型 + v1.2 执行架构 |
+| [docs/WORKER_PROTOCOL.md](docs/WORKER_PROTOCOL.md) | Worker 消息协议 / 取消 / 故障恢复（v1.2 新增） |
+| [docs/TRACE_STORE.md](docs/TRACE_STORE.md) | Checkpoint + Delta 存储与快照重建（v1.2 新增） |
 | [docs/VISUALIZATION_SPEC.md](docs/VISUALIZATION_SPEC.md) | UI 布局与可视化规范 |
 | [docs/ERROR_SPEC.md](docs/ERROR_SPEC.md) | 错误分类与文案规范 |
 | [docs/TEST_PLAN.md](docs/TEST_PLAN.md) | 测试策略 |
@@ -129,6 +141,9 @@ React 19 · TypeScript（strict）· Vite · vitest · ESLint · CodeMirror 6 ·
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 开发路线 |
 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 变更日志 |
 | [docs/P10_PUBLIC_RELEASE_HARDENING.md](docs/P10_PUBLIC_RELEASE_HARDENING.md) | v1.0.1 发布加固计划 |
+| [docs/P12_V1.1_SEMANTIC_HARDENING.md](docs/P12_V1.1_SEMANTIC_HARDENING.md) | v1.1 语义加固计划 |
+| [docs/P13_V1.2_RUNTIME_ARCHITECTURE.md](docs/P13_V1.2_RUNTIME_ARCHITECTURE.md) | v1.2 运行时架构加固设计 |
+| [docs/V1.2.0_FINAL_REPORT.md](docs/V1.2.0_FINAL_REPORT.md) | v1.2.0 最终报告 |
 | [docs/FINAL_REPORT.md](docs/FINAL_REPORT.md) | v1.0 最终报告 |
 | [docs/V1.0.1_FINAL_REPORT.md](docs/V1.0.1_FINAL_REPORT.md) | v1.0.1 最终报告 |
 

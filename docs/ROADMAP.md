@@ -91,10 +91,30 @@
 - [x] **性能**：示例库步骤数与快照字节与 v1.0.2 完全一致，耗时同量级（无回退）
 - [x] v1.1.0 tag + GitHub Release
 
-## v1.2 候选（Runtime Architecture Hardening，仅记录）
+## v1.2.0 — Runtime Architecture Hardening（2026-09）✅
 
-- Web Worker 执行隔离（大程序不阻塞 UI）
-- 增量执行 / checkpoint + delta snapshot（替代每步全量深拷贝）
+> 设计文档 P13_V1.2_RUNTIME_ARCHITECTURE.md；协议与存储规范 WORKER_PROTOCOL.md /
+> TRACE_STORE.md（新增）。目标：不是支持更多 C，而是重构执行架构。
+
+- [x] **Worker 化**：compile + Interpreter 移入 Web Worker（runtime.worker /
+  worker-core / client / trace-assembler）；主线程零解释执行
+- [x] **类型化流式协议**：全消息 runId 防竞态；STEP_BATCH 批量（100 步）；
+  READY 看门狗 / 故障恢复 / Worker 重建
+- [x] **取消**：terminate 硬取消 + shouldCancel 协作检查点 + `cancelled` 终态；
+  停止按钮 / 编辑自动取消 / 切换示例终止
+- [x] **TraceStore + Checkpoint/Delta**：锚点 100 步 + 逐步 diff 增量（snap-set 兜底）；
+  二分重建 + LRU；内存 −93.8%（10k×500 实测）
+- [x] **金标等价**：21 示例 + 14 边缘语料逐步 deepEqual；K 扫描；1000 次随机 seek
+- [x] **Bundle 拆分**：main 954→774 KB，worker chunk 156 KB，tree-sitter 出主入口
+- [x] **浏览器实测**：主线程最大长任务 69ms；10k 程序端到端 2.2s；取消/连跑/编辑
+  竞态 10/10 通过（scripts/browser-stress.mjs）
+- [x] **压测回归**：undefined 选项覆盖默认保护的 bug 修复；100 连跑无泄漏
+- [x] v1.2.0 tag + GitHub Release
+
+## v1.3 候选（仅记录）
+
+- 边执行边播放（流式期间允许拖动已生成部分的时间轴）
+- Worker 内分块执行（shouldCancel 真正接管远程取消，消除 terminate 重建成本）
 - 函数体内部副作用与调用点表达式的作用（跨函数 E_UB 分析）
 - 三目运算符、位运算、printf 宽度/精度（`%5d`、`%.2f`）、二维数组
 - 字符串（char 数组）基础操作、scanf 模拟输入

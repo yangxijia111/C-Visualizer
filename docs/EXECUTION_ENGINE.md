@@ -1,6 +1,8 @@
 # 执行引擎设计（EXECUTION_ENGINE）
 
-> 解释器一次同步执行整个程序，产出 `RunResult`；UI 对步骤数组做纯索引播放。
+> 解释器在 Web Worker 中同步执行整个程序，产出 `RunResult`（v1.2 起 trace 以流式
+> 批量送达主线程，以 Checkpoint+Delta 存储，见 §9 与 WORKER_PROTOCOL/TRACE_STORE.md）。
+> 解释器本身的数据模型与执行语义（本文 §1–§8）自 v1.1.0 起保持稳定。
 
 ## 1. 顶层 API
 
@@ -176,3 +178,24 @@ loopDepth / switchDepth 保证。
 
 - 地址分配、作用域 id、步骤序列完全由程序决定 → 同一程序两次运行步骤序列逐位相同（可测试断言）。
 - 禁止任何随机性 / 时间依赖 / 迭代顺序不确定的遍历（Map 一律用数组或排序键）。
+
+## 9. 运行时执行架构（v1.2.0）
+
+```
+Main Thread: 编辑 / 播放 / 面板渲染
+      ↕ RuntimeClient（runId 防竞态 / READY 看门狗 / 取消 / 故障恢复）
+Web Worker:  tree-sitter wasm → compile → Interpreter → TraceAssembler
+      ↘ STEP_BATCH 流式批量（默认 100 步/批，postMessage 不阻塞解释器）
+Main Thread: TraceStore（Checkpoint 每 100 步 + 逐步 Delta；任意步快照确定性重建）
+```
+
+- **保护语义不变**：maxSteps=10000 / 深度 100 / 墙钟 10s 三重保护原样保留；
+  显式 `undefined` 选项回落默认值（v1.2 压测回归）。
+- **新增状态**：`RunResult.status` 增加 `'cancelled'`（用户取消，与 step-limit 教学保护严格区分）。
+- **新钩子**：`RunOptions.onStep(step, prevState)`（纯观测，每步触发，含终止步骤）、
+  `RunOptions.shouldCancel()`（协作取消检查点）。
+- 取消 = 主线程 `worker.terminate()` 硬取消（同步解释器无法在执行中处理消息）；
+  详见 WORKER_PROTOCOL §3。
+- 内存与重建：见 TRACE_STORE.md（10k 步 × 500 单元实测 −93.8%）。
+- 主线程响应性实测：大程序运行全程主线程最大长任务 < 100ms（v1.1 为整段冻结
+  约 3.5s）；数据见 docs/V1.2.0_FINAL_REPORT.md。

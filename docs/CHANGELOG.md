@@ -2,6 +2,53 @@
 
 所有对外可见的变化记录于此。格式参考 Keep a Changelog；版本号遵循语义化版本。
 
+## [1.2.0] - 2026-09-23
+
+### Runtime Architecture Hardening
+
+目标不是支持更多 C，而是**重构执行架构**：Interpreter 移出主线程、执行可取消、
+trace 存储从「每步全量快照」升级为「Checkpoint + Delta」。语义行为与 v1.1 完全一致
+（金标等价验收）。设计文档 docs/P13_V1.2_RUNTIME_ARCHITECTURE.md。
+
+- **Worker 化**：compile（tree-sitter wasm）与解释执行全部移入 Web Worker
+  （`src/worker/`）；主线程只做编辑、流式接收、播放与渲染。大程序运行期间主线程
+  实测最大长任务 < 100ms（v1.1 为整段冻结约 3.5 秒）
+- **Bundle 拆分**：主入口不再打包 tree-sitter（954 KB → 774 KB）；
+  解释器 + 解析器宿主独立 worker chunk（156 KB）；Pages 子路径对 worker 与 wasm 全部生效
+- **类型化流式协议**：discriminated union 消息（COMPILE_RUN / RUN_STARTED /
+  STEP_BATCH / RUN_FINISHED / COMPILE_ERROR / CANCELLED / WORKER_ERROR / READY /
+  CANCEL / DISPOSE），全消息携带 runId；批次默认 100 步，postMessage 不阻塞解释器，
+  运行中 UI 显示「已生成 N 步」（docs/WORKER_PROTOCOL.md）
+- **runId 防竞态**：过期 run 的消息被客户端静默丢弃；快速三连 Run / 运行中编辑 /
+  切换示例均有自动测试
+- **取消**：「■ 停止」按钮与编辑源码自动取消——terminate 硬取消（同步解释器无法在
+  执行中处理消息），本地合成 `cancelled` 终态；`RunResult.status` 新增 `'cancelled'`，
+  解释器新增 `shouldCancel` 协作检查点（与 step-limit 教学保护严格区分）
+- **TraceStore（Checkpoint + Delta）**：主线程 trace 存储从每步全量快照升级为
+  每 100 步一个锚点 + 逐步增量（相邻快照 diff，构造性完整，结构异常回退 snap-set
+  整体兜底）；任意步骤快照确定性重建（最近锚点二分 + 前向 apply + LRU=32 纯记忆化）
+  （docs/TRACE_STORE.md）
+- **内存实测**（Node 强制 gc 保留堆，同机同方法对比）：10000 步 × 500 单元
+  288.3 MB → 17.9 MB（**−93.8%**，序列化体积 166 MB → 5.7 MB）；fib(12) 递归
+  −89.4%；100 单元数组 −75%；小状态程序无明显收益（如实记录）
+- **随机跳转**：金标等价验收——21 个内置示例 + goto/递归/指针/switch 穿透/运行错误/
+  step-limit/深度超限语料，全量 trace vs store 重建逐步 deepEqual；checkpoint
+  K=1/2/97/100000 扫描；每程序 1000 次固定种子随机 seek 全部一致
+- **修复（压测发现）**：显式 `undefined` 运行选项会覆盖解释器默认保护
+  （step-limit / time-limit 失效 → 解释器无限运行）；构造器改为逐字段合并，
+  默认保护在任何调用方式下都生效（附回归测试）
+- **浏览器实测 10/10**（headless Chrome + CDP）：10k×500 程序端到端 2.2 秒、
+  运行中流式进度与停止按钮、主线程无 >200ms 长任务、时间轴随机跳转、运行中取消、
+  三连 Run、编辑自动取消全部通过（scripts/browser-stress.mjs）
+- **无泄漏**：100 连续 Run 单 Worker 复用零增长；取消重建 20 轮实例数有界
+- **测试**：441 → 539+（worker 协议 11 / client+竞态+取消 19 / 解释器钩子 7 /
+  delta property 8 / trace store 10 / 金标等价+随机 seek 44 / 泄漏 2 /
+  保护回归 2 等）
+- **性能**：生成开销与 v1.1 同量级（diff 装配为每步 O(状态规模) 追加成本）；
+  store 重建随机 seek 1000 次 ≤ 61ms（10k 步规模）
+- **文档**：P13 设计先行；WORKER_PROTOCOL.md / TRACE_STORE.md（新增）；
+  EXECUTION_ENGINE / TEST_PLAN / ROADMAP / README 同步
+
 ## [1.1.0] - 2026-09-22
 
 ### Semantic Conformance Hardening

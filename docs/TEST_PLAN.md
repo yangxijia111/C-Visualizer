@@ -23,9 +23,20 @@ tests/
 ├── protection.test.ts      # 死循环保护 / 深度上限
 ├── audit.test.ts           # 审计回归（快照一致性 / 确定性）
 ├── examples.test.ts        # 示例库完整性
-├── release.test.ts         # 发布回归（文档一致性 / Pages base / 导出稳定）
+├── release.test.ts         # 发布回归（文档一致性 / Pages base / worker 产物 / bundle 拆分 / 导出稳定）
 ├── run-state.test.ts       # UI 纯逻辑（stale/播放）
 ├── scope-env.test.ts       # TypeEnvironment 作用域栈单元测试（v1.1.0）
+├── worker/                 # v1.2.0 运行时架构套件
+│   ├── fake-worker.ts          # 进程内 Fake Worker（core 驱动，串行 + 异步派发）
+│   ├── hooks.test.ts           # onStep 观测链 / shouldCancel 协作取消 / undefined 选项回归
+│   ├── worker-core.test.ts     # 协议消息序列 / 批次 / 错误与保护路径 / 串行化 / TraceStore 重建
+│   ├── client.test.ts          # READY 门闩 / runId 过滤 / 硬取消 / 故障恢复 / 三连 Run
+│   └── leak.test.ts            # 100 连跑单 Worker 零增长；取消重建实例数有界
+├── trace/                  # v1.2.0 trace 存储套件
+│   ├── delta.test.ts           # diff/apply 定点场景 + 固定种子 property（随机状态链/随机对）
+│   ├── trace-store.test.ts     # 追加/读取/清空/批次连续性/终态
+│   └── golden-equivalence.test.ts  # 金标等价（21 示例 + 14 边缘语料逐步 deepEqual）、
+│                                  # checkpoint K 扫描、1000 次随机 seek、缓存确定性
 ├── semantic/               # v1.1.0 语义加固套件
 │   ├── scope.test.ts           # 词法作用域回归（任务书案例 1-6 + for/switch/形参）
 │   ├── return-coerce.test.ts   # 统一收敛：return/参数/数组元素 + Return Checker
@@ -35,10 +46,13 @@ tests/
 │   ├── ub.test.ts              # E_UB 判定表（双写/读写竞争/赋值豁免/序列点分区）
 │   ├── invariant.test.ts       # E_INTERNAL 不变量 + Checker/Interpreter 转换一致性
 │   └── property.test.ts        # 随机 int 表达式 vs 独立 int32 参考模型（300 样本）
-└── differential/           # 差分测试（v1.1.0）
-    ├── corpus.ts               # 26 个 defined-behavior 程序语料
-    ├── corpus-expected.test.ts # 本地基准：预期输出按 C 语义手工推演（始终运行）
-    └── diff-gcc.test.ts        # gcc/clang 可用时真实编译比对（无编译器优雅跳过）
+├── differential/           # 差分测试（v1.1.0）
+│   ├── corpus.ts               # 26 个 defined-behavior 程序语料
+│   ├── corpus-expected.test.ts # 本地基准：预期输出按 C 语义手工推演（始终运行）
+│   └── diff-gcc.test.ts        # gcc/clang 可用时真实编译比对（无编译器优雅跳过）
+└── bench/                  # 基准（npm run bench，不随 npm test 运行）
+    ├── runtime-bench.bench.ts      # v1.1 基线（全量快照 + 主线程），docs/runtime-baseline.json
+    └── runtime-v12-bench.bench.ts  # v1.2 对比（checkpoint+delta），docs/runtime-v1.2-benchmark.json
 ```
 
 ## 2. 测试工具（helpers.ts）
@@ -118,6 +132,24 @@ function runProgram(src: string, opts?): RunOutcome
   记录 DIFFERENTIAL_COMPILER_UNAVAILABLE）。
 - Property：300 个随机 int 表达式（种子固定）与独立 BigInt int32 参考模型一致。
 
+### 3.10 运行时架构（v1.2.0）
+- **解释器钩子**：onStep 每步触发且 prevState 链正确（零拷贝观测）；注册与否结果完全一致；
+  shouldCancel 驱动 `cancelled` 终态且优先于 step-limit；显式 undefined 选项不覆盖默认保护。
+- **协议**：消息序列（RUN_STARTED → STEP_BATCH×k → RUN_FINISHED）；批大小与残余冲刷；
+  编译/运行时/step-limit/COMPILE_ERROR 路径；worker-core 串行化（A 的消息先于 B）；
+  空闲 CANCEL 回执；DISPOSE 后忽略。
+- **竞态**：旧 run 消息静默丢弃；伪造 runId 消息丢弃；三连 Run 只有最后一次落地；
+  取消后过期批次不污染；快速编辑/切换示例自动终止。
+- **取消**：cancelActive 合成 cancelled 终态 + terminate + 重建后可正常运行；
+  无活跃 run 时空操作。
+- **故障恢复**：READY 超时 / WORKER_ERROR(null) / onerror / onmessageerror 全部得到
+  终态（任何路径不悬挂）；失败后重建 Worker 可恢复。
+- **金标等价**：21 示例 + 14 边缘语料（goto/递归/指针/switch 穿透/除零/未初始化/越界/
+  深度超限/step-limit/printf/do-while/嵌套循环/短路）→ 全量 trace vs store 重建
+  逐步 deepEqual；checkpoint K=1/2/97/100000；1000 次固定种子随机 seek；
+  LRU 热缓存与冷重建内容一致。
+- **泄漏**：100 连续 Run 单 Worker 零增长、批次数恒定；取消重建 20 轮实例数有界。
+
 ## 4. 集成测试
 
 - SUPPORTED_C §4 验收代码 + 19 个内置示例逐个「可运行、正常完成、无运行时错误」。
@@ -126,8 +158,12 @@ function runProgram(src: string, opts?): RunOutcome
 ## 5. UI 测试策略
 
 - UI 逻辑不在 vitest 内做组件级单测（成本高收益低），以「构建通过 + 浏览器实测」保障：
-  - Phase 8 使用浏览器自动化（browser-use）走查：示例载入 → Run → Next×N → Previous → Restart → 拖动时间轴 → 错误代码不崩溃。
+  - Phase 8 使用浏览器自动化走查：示例载入 → Run → Next×N → Previous → Restart → 拖动时间轴 → 错误代码不崩溃。
   - 关键视觉断点截图人工复核（行高亮、变量高亮、数组格子、调用栈）。
+- **v1.2.0 浏览器实测脚本**（scripts/browser-stress.mjs，headless Chrome + 原生 CDP，
+  preview pages 构建）：主线程长任务观测（PerformanceObserver，全程无 >200ms 任务）、
+  10k×500 程序流式进度与 step-limit 终止、运行中取消、时间轴随机跳转、三连 Run、
+  运行中编辑自动取消。真实 Worker/WASM 路径只有此处覆盖（Fake Worker 不可替代）。
 
 ## 6. 质量门槛（每个 Phase 出口）
 
