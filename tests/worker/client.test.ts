@@ -176,6 +176,79 @@ describe('RuntimeClient：故障恢复', () => {
   });
 });
 
+describe('RuntimeClient：硬取消（Phase D）', () => {
+  it('cancelActive：合成 cancelled 终态、terminate Worker、下次 run 重建成功', async () => {
+    const { client, fakes } = makeClient();
+    await client.ensureReady();
+    const { log, cb } = makeRunLog();
+    client.run(PROGRAM, { batchSize: 100 }, cb);
+    expect(client.activeRunId).not.toBeNull();
+
+    client.cancelActive();
+    await FakeWorker.flush();
+
+    expect(log.finished).toEqual({ status: 'cancelled', output: '', totalSteps: 0 });
+    expect(client.activeRunId).toBeNull();
+    expect(fakes[0].terminated).toBe(true);
+
+    // 下一次 run 自动重建 Worker 并完整完成
+    const second = makeRunLog();
+    client.run(PROGRAM, { batchSize: 100 }, second.cb);
+    await settleAll(fakes);
+    expect(fakes.length).toBe(2);
+    expect(second.log.finished).toEqual({ status: 'completed', output: '', totalSteps: second.log.batches.reduce((a, b) => a + b.entries.length, 0) });
+    client.dispose();
+  });
+
+  it('无活跃 run 时 cancelActive 为空操作（不 terminate、不回调）', async () => {
+    const { client, fakes } = makeClient();
+    await client.ensureReady();
+    client.cancelActive();
+    expect(fakes[0].terminated).toBe(false);
+    client.dispose();
+  });
+
+  it('快速三连 Run：只有第三次（活跃 run）的回调落地，前两次全部静默丢弃', async () => {
+    const { client, fakes } = makeClient();
+    await client.ensureReady();
+    const r1 = makeRunLog();
+    const r2 = makeRunLog();
+    const r3 = makeRunLog();
+    client.run(PROGRAM, { batchSize: 50 }, r1.cb);
+    client.run(PROGRAM, { batchSize: 50 }, r2.cb);
+    client.run(PROGRAM, { batchSize: 50 }, r3.cb);
+    await settleAll(fakes);
+
+    for (const r of [r1.log, r2.log]) {
+      expect(r.startedWith).toBeNull();
+      expect(r.batches).toEqual([]);
+      expect(r.finished).toBeNull();
+    }
+    expect(r3.log.finished).not.toBeNull();
+    expect(r3.log.finished!.status).toBe('completed');
+    const steps3 = r3.log.batches.reduce((a, b) => a + b.entries.length, 0);
+    expect(r3.log.finished!.totalSteps).toBe(steps3);
+    client.dispose();
+  });
+
+  it('取消后注入的过期批次被丢弃（终止后不得污染后续状态）', async () => {
+    const { client, fakes } = makeClient();
+    await client.ensureReady();
+    const { log, cb } = makeRunLog();
+    const rid = client.run(PROGRAM, { batchSize: 100 }, cb);
+    client.cancelActive();
+    // 模拟 terminate 前已在主线程消息队列里的迟到批次
+    fakes[0].injectFromWorker({ type: 'STEP_BATCH', runId: rid, startIndex: 0, entries: [] });
+    fakes[0].injectFromWorker({ type: 'RUN_FINISHED', runId: rid, status: 'completed', output: 'stale', totalSteps: 1 });
+    await FakeWorker.flush();
+
+    // 合成的取消终态不被过期消息覆盖
+    expect(log.finished).toEqual({ status: 'cancelled', output: '', totalSteps: 0 });
+    expect(log.batches).toEqual([]);
+    client.dispose();
+  });
+});
+
 describe('RuntimeClient：cancel 与 dispose', () => {
   it('cancel 发送 CANCEL 消息（runId 对齐活跃 run）', async () => {
     const { client, fakes } = makeClient();

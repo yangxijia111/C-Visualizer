@@ -105,6 +105,14 @@ export default function App() {
     return () => clearInterval(timer);
   }, [playing, speed, total]);
 
+  // 停止当前运行：terminate 硬取消 + 使旧 run 回调失效（已接收的部分批次丢弃）
+  const stopRun = useCallback(() => {
+    runIdRef.current = -1;
+    clientRef.current?.cancelActive();
+    setRunning(false);
+    setProgress(0);
+  }, []);
+
   const handleRun = useCallback(() => {
     if (parserError) return; // 解析器不可用时禁止运行
     setPlaying(false);
@@ -157,12 +165,14 @@ export default function App() {
     runIdRef.current = rid;
   }, [source, parserError, getClient]);
 
-  // 编辑器输入：源码一旦变化，旧 runResult 即为「上一次运行」的结果，停止播放
+  // 编辑器输入：源码一旦变化，旧 runResult 即为「上一次运行」的结果，停止播放；
+  // 若 Worker 正在执行，自动硬取消当前运行（其结果不再适用，任务书 §24）
   const handleSourceChange = useCallback((v: string) => {
     setSource(v);
     setSourceDirty((d) => nextDirtyState(d, { type: 'edit' }));
     setPlaying(false);
-  }, []);
+    if (clientRef.current?.activeRunId != null) stopRun();
+  }, [stopRun]);
 
   const loadExample = useCallback((id: string) => {
     const ex = EXAMPLES.find((e) => e.id === id);
@@ -174,12 +184,10 @@ export default function App() {
     setRunResult(null);
     setCurrentStep(-1);
     setPlaying(false);
-    // 使在跑的旧 run 全部回调失效（其终态不得落入新示例的上下文）
-    runIdRef.current = -1;
-    setRunning(false);
-    setProgress(0);
+    // 使在跑的旧 run 立即终止（硬取消），其终态不得落入新示例的上下文
+    stopRun();
     setSourceDirty((d) => nextDirtyState(d, { type: 'load-example' }));
-  }, []);
+  }, [stopRun]);
 
   const canNext = currentStep < total - 1;
   const canPrev = currentStep > 0;
@@ -202,6 +210,9 @@ export default function App() {
           <button className="primary" onClick={handleRun} disabled={shouldDisableRun(busyOrRunning, parserError)} title="编译并运行">
             {running ? '运行中…' : busy ? '加载中…' : '▶ 运行'}
           </button>
+          {running && (
+            <button onClick={stopRun} title="停止当前执行">■ 停止</button>
+          )}
           <button onClick={() => { setPlaying(false); setCurrentStep((s) => prevStep(s)); }} disabled={playbackLocked || !canPrev} title="上一步">
             ◀ 上一步
           </button>

@@ -52,7 +52,8 @@ async function main() {
     if (m.id && pending.has(m.id)) {
       const p = pending.get(m.id);
       pending.delete(m.id);
-      m.error ? p.reject(new Error(m.error.message)) : p.resolve(m.result);
+      if (m.error) p.reject(new Error(m.error.message));
+      else p.resolve(m.result);
     }
   };
 
@@ -107,7 +108,7 @@ async function main() {
   if (!/\d+ \/ \d+ 步/.test(ui1.indicator ?? '')) throw new Error('步骤指示器异常: ' + ui1.indicator);
 
   // 3. Next / Previous / Timeline 跳转仍可用
-  const ui2 = await evl(`(() => {
+  await evl(`(() => {
     const btns = [...document.querySelectorAll('button')];
     const next = btns.find((b) => b.title === '下一步');
     next.click();

@@ -105,6 +105,25 @@ export class RuntimeClient {
     this.worker.postMessage({ type: 'CANCEL', runId: target });
   }
 
+  /**
+   * 硬取消当前活跃 run（v1.2 停止按钮 / 编辑源码自动取消）：
+   * 同步解释器无法在执行中处理消息，唯一可靠的立即终止手段是 terminate。
+   * 本地合成 cancelled 终态（丢弃已接收的部分批次），Worker 标记死亡，
+   * 下次 run 自动重建（wasm 重初始化成本见 benchmark）。无活跃 run 时为空操作。
+   */
+  cancelActive(): void {
+    const active = this.active;
+    if (!active) return;
+    this.active = null;
+    if (this.worker && !this.workerDead) {
+      this.worker.terminate();
+    }
+    this.worker = null;
+    this.workerDead = true;
+    this.ready = null;
+    active.cb.onFinished?.('cancelled', '', 0);
+  }
+
   /** 释放 Worker（应用卸载时调用；此后客户端不可再用） */
   dispose(): void {
     if (this.worker) {

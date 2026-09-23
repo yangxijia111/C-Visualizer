@@ -6,9 +6,17 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    // Node 环境脚本（如 parser spike）
+    // Node 环境脚本（benchmark / 浏览器 CDP 冒烟等）
     files: ['scripts/**/*.mjs', '*.config.js'],
-    languageOptions: { globals: { console: 'readonly', process: 'readonly' } },
+    languageOptions: {
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        setTimeout: 'readonly',
+        fetch: 'readonly',
+        WebSocket: 'readonly',
+      },
+    },
   },
   {
     files: ['**/*.ts', '**/*.tsx'],
