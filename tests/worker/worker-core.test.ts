@@ -1,9 +1,10 @@
 // worker-core 协议语义测试：消息序列、批次切分、终态路径、串行化、取消回执
+// Phase F 起默认传输为 Checkpoint+Delta：批次重组一律经 TraceStore 重建（与 App 相同路径）
 import { describe, expect, it } from 'vitest';
 import { createWorkerCore } from '../../src/worker/worker-core';
 import type { MainToWorkerMessage, WorkerToMainMessage } from '../../src/worker/protocol';
-import { entryToStep } from '../../src/worker/trace-assembler';
 import { compile, runProgram } from '../../src/core/run';
+import { TraceStore } from '../../src/core/trace/trace-store';
 import '../helpers';
 
 /** 收集 Worker 全部出口消息 */
@@ -15,6 +16,17 @@ function makeCollector(): { posts: WorkerToMainMessage[]; core: ReturnType<typeo
 
 async function drive(core: ReturnType<typeof createWorkerCore>, msgs: MainToWorkerMessage[]): Promise<void> {
   for (const m of msgs) await core.handle(m);
+}
+
+/** 把 worker 消息流装配成 TraceStore（App 同构路径） */
+function storeFromPosts(posts: WorkerToMainMessage[]): TraceStore {
+  const store = new TraceStore();
+  for (const m of posts) {
+    if (m.type === 'RUN_STARTED') store.appendInitial(m.initialSnapshot, '');
+    else if (m.type === 'STEP_BATCH') store.appendBatch(m.startIndex, m.entries);
+    else if (m.type === 'RUN_FINISHED') store.finalize(m.status, m.output);
+  }
+  return store;
 }
 
 const PROGRAM = `
@@ -65,17 +77,18 @@ describe('worker-core：COMPILE_RUN 正常路径', () => {
     }
   });
 
-  it('批次重组后的 trace 与进程内 runProgram 逐步 deepEqual（record + snapshot）', async () => {
+  it('批次经 TraceStore 重建后与进程内 runProgram 逐步 deepEqual（record + snapshot）', async () => {
     const { posts, core } = makeCollector();
     await core.init();
     await drive(core, [{ type: 'COMPILE_RUN', runId: 1, source: PROGRAM, options: { batchSize: 4 } }]);
 
     const ref = await reference(PROGRAM);
-    const steps = posts
-      .filter((m): m is Extract<WorkerToMainMessage, { type: 'STEP_BATCH' }> => m.type === 'STEP_BATCH')
-      .flatMap((b) => b.entries.map(entryToStep));
-    expect(steps.length).toBe(ref.steps.length);
-    expect(steps).toEqual(ref.steps);
+    const store = storeFromPosts(posts);
+    expect(store.length).toBe(ref.steps.length);
+    for (let i = 0; i < ref.steps.length; i++) {
+      expect(store.getStepView(i)).toEqual(ref.steps[i]);
+    }
+    expect(store.toRunResult()).toEqual({ ...ref, source: '' });
     const finished = posts[posts.length - 1];
     if (finished.type === 'RUN_FINISHED') {
       expect(finished.output).toBe(ref.output);
@@ -83,7 +96,7 @@ describe('worker-core：COMPILE_RUN 正常路径', () => {
     }
   });
 
-  it('record 字段不含 snapshot；flowEvents/evalTrace/description 完整保留', async () => {
+  it('record 字段不含 snapshot；checkpoint/delta 混合格式且元数据完整', async () => {
     const { posts, core } = makeCollector();
     await core.init();
     const src = `
@@ -96,17 +109,21 @@ int main() {
   return 0;
 }
 `;
-    await drive(core, [{ type: 'COMPILE_RUN', runId: 1, source: src, options: { batchSize: 100 } }]);
-    const batch = posts.find((m): m is Extract<WorkerToMainMessage, { type: 'STEP_BATCH' }> => m.type === 'STEP_BATCH');
-    expect(batch).toBeDefined();
-    for (const entry of batch!.entries) {
+    await drive(core, [{ type: 'COMPILE_RUN', runId: 1, source: src, options: { batchSize: 100, checkpointInterval: 3 } }]);
+    const batches = posts.filter((m): m is Extract<WorkerToMainMessage, { type: 'STEP_BATCH' }> => m.type === 'STEP_BATCH');
+    expect(batches.length).toBeGreaterThanOrEqual(1);
+    const all = batches.flatMap((b) => b.entries);
+    expect(all.length).toBeGreaterThan(3);
+    const formats = new Set(all.map((e) => e.state.format));
+    expect(formats).toContain('full'); // 锚点存在
+    expect(formats).toContain('delta'); // 增量存在
+    for (const entry of all) {
       expect('snapshot' in entry.record).toBe(false);
       expect(Array.isArray(entry.record.flowEvents)).toBe(true);
       expect(typeof entry.record.description).toBe('string');
-      expect(entry.state.format).toBe('full');
     }
     // 至少一个步骤有求值轨迹
-    expect(batch!.entries.some((e) => (e.record.evalTrace?.length ?? 0) > 0)).toBe(true);
+    expect(all.some((e) => (e.record.evalTrace?.length ?? 0) > 0)).toBe(true);
   });
 });
 
@@ -144,10 +161,10 @@ int main() {
     const finished = posts[posts.length - 1];
     expect(finished.type).toBe('RUN_FINISHED');
     if (finished.type === 'RUN_FINISHED') expect(finished.status).toBe('runtime-error');
-    const batch = posts.find((m): m is Extract<WorkerToMainMessage, { type: 'STEP_BATCH' }> => m.type === 'STEP_BATCH');
-    const steps = batch!.entries.map(entryToStep);
-    expect(steps[steps.length - 1].status).toBe('runtime-error');
-    expect(steps[steps.length - 1].errorCode).toBe('E_DIV_ZERO');
+    const store = storeFromPosts(posts);
+    const steps = Array.from({ length: store.length }, (_, i) => store.getStepView(i));
+    expect(steps[steps.length - 1]!.status).toBe('runtime-error');
+    expect(steps[steps.length - 1]!.errorCode).toBe('E_DIV_ZERO');
     const ref = await reference(src);
     expect(steps).toEqual(ref.steps);
   });
@@ -168,10 +185,10 @@ int main() {
     const finished = posts[posts.length - 1];
     expect(finished.type).toBe('RUN_FINISHED');
     if (finished.type === 'RUN_FINISHED') expect(finished.status).toBe('step-limit');
-    const batch = posts.find((m): m is Extract<WorkerToMainMessage, { type: 'STEP_BATCH' }> => m.type === 'STEP_BATCH');
-    const steps = batch!.entries.map(entryToStep);
+    const store = storeFromPosts(posts);
+    const steps = Array.from({ length: store.length }, (_, i) => store.getStepView(i));
     expect(steps.length).toBe(31);
-    expect(steps[steps.length - 1].status).toBe('step-limit');
+    expect(steps[steps.length - 1]!.status).toBe('step-limit');
   });
 });
 

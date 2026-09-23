@@ -1,7 +1,7 @@
 // TraceStore 测试：追加/读取/清空/终态/批次连续性校验/RunResult 组装
 import { describe, expect, it } from 'vitest';
 import { TraceStore } from '../../src/core/trace/trace-store';
-import type { SnapshotDelta } from '../../src/core/trace/delta';
+import { diffSnapshot } from '../../src/core/trace/delta';
 import { compile, runProgram } from '../../src/core/run';
 import '../helpers';
 
@@ -124,7 +124,7 @@ describe('TraceStore：批次协议校验', () => {
     expect(() => store.appendBatch(0, [entry])).toThrow(/批次不连续/);
   });
 
-  it('delta 格式条目在 Phase E 被明确拒绝（Phase F 引入后开放）', async () => {
+  it('delta 格式条目被接受：var-add 增量可重建', async () => {
     const compiled = await compile(PROGRAM);
     if (!compiled.ok) throw new Error('编译失败');
     const ref = runProgram(compiled.program, PROGRAM);
@@ -135,8 +135,11 @@ describe('TraceStore：批次协议校验', () => {
       delete r.snapshot;
       return r as Parameters<TraceStore['appendBatch']>[1][number]['record'];
     })();
-    const delta: SnapshotDelta[] = [{ op: 'scope-pop' }];
-    expect(() => store.appendBatch(0, [{ record, state: { format: 'delta', delta } }])).toThrow(/full/);
+    // 第 0 步的 delta：initial → steps[0].snapshot
+    const delta = diffSnapshot(ref.initialSnapshot, ref.steps[0].snapshot);
+    store.appendBatch(0, [{ record, state: { format: 'delta', delta } }]);
+    expect(store.getSnapshot(0)).toEqual(ref.steps[0].snapshot);
+    expect(store.getStats().deltaSteps).toBe(1);
   });
 });
 

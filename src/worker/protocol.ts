@@ -12,6 +12,8 @@ export interface RunOptionsWire {
   maxCallDepth?: number;
   /** 流式批量大小（步/批；传输参数，默认 100） */
   batchSize?: number;
+  /** Checkpoint 间隔（每 K 步一个完整快照锚点；存储参数，默认 100） */
+  checkpointInterval?: number;
 }
 
 /** 单步的存储状态：full = 完整快照（兼作 Checkpoint 锚点）；delta = 相对上一步的增量操作序列 */

@@ -12,6 +12,8 @@ export interface WorkerCoreDeps {
   post: (msg: WorkerToMainMessage) => void;
   /** 默认批大小（消息未指定时使用；默认 100） */
   defaultBatchSize?: number;
+  /** 默认 Checkpoint 间隔（消息未指定时使用；默认 100） */
+  defaultCheckpointInterval?: number;
 }
 
 export interface WorkerCore {
@@ -89,6 +91,7 @@ export function createWorkerCore(deps: WorkerCoreDeps): WorkerCore {
 
       const assembler = new TraceAssembler({
         batchSize: options?.batchSize ?? deps.defaultBatchSize ?? 100,
+        checkpointInterval: options?.checkpointInterval ?? deps.defaultCheckpointInterval ?? 100,
         flush: (startIndex, entries) => {
           post({ type: 'STEP_BATCH', runId, startIndex, entries });
         },
