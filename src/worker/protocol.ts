@@ -14,10 +14,10 @@ export interface RunOptionsWire {
   batchSize?: number;
 }
 
-/** 单步的存储状态：full = 完整快照（兼作 Checkpoint 锚点）；delta = 相对上一步的增量 */
+/** 单步的存储状态：full = 完整快照（兼作 Checkpoint 锚点）；delta = 相对上一步的增量操作序列 */
 export type TraceEntryState =
   | { format: 'full'; snapshot: Snapshot }
-  | { format: 'delta'; delta: SnapshotDelta };
+  | { format: 'delta'; delta: SnapshotDelta[] };
 
 /** 单步的传输单元：元数据 + 存储状态（快照本身不由 record 携带） */
 export interface TraceEntry {
